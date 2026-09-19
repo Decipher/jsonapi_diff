@@ -148,6 +148,37 @@ class DiffResourceTest extends BrowserTestBase {
   }
 
   /**
+   * A paragraph that holds only a reference reports fields as an object.
+   *
+   * Every field of a group recurses into `children`, so its own map is
+   * empty. PHP encodes an empty array as `[]`, so the raw body is read here
+   * rather than a decoded document, which cannot tell the two apart.
+   */
+  public function testReferenceOnlyParagraphReportsAnEmptyObject(): void {
+    $this->createGroupParagraphType();
+    $this->container->get('router.builder')->rebuild();
+    $group = $this->createGroup($this->createBlock('first block'));
+    $node = $this->createArticle([
+      'field_text' => 'text',
+      'field_blocks' => $this->references($group),
+      'uid' => $this->editor->id(),
+    ]);
+    $this->drupalLogin($this->editor);
+
+    $body = $this->drupalGet($this->path($node), [], self::HEADERS);
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertStringContainsString('"fields":{}', $body);
+    $this->assertStringNotContainsString('"fields":[]', $body);
+
+    $document = json_decode($body, FALSE);
+    $diffs = array_values(array_filter($document->included, static fn (\stdClass $diff): bool => str_starts_with($diff->id, $group->uuid() . ':')));
+    $this->assertCount(1, $diffs);
+    $this->assertInstanceOf(\stdClass::class, $diffs[0]->attributes->fields);
+    $this->assertSame([], get_object_vars($diffs[0]->attributes->fields));
+  }
+
+  /**
    * A malformed identifier is a 400 error document.
    */
   public function testMalformedIdentifier(): void {

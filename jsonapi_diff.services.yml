@@ -4,6 +4,17 @@ services:
     arguments:
       - '@jsonapi.version_negotiator'
       - '@jsonapi.entity_access_checker'
+  # The class is swapped for its impostor subclass by the service provider,
+  # because the serializer only accepts normalizers from JSON:API's own
+  # namespace. The lowest decoration priority is applied last and so wraps
+  # the other decorators of this service, which is where a finished
+  # normalization can be adjusted.
+  jsonapi_diff.normalizer.resource_object:
+    class: Drupal\jsonapi\Normalizer\ImpostorFrom\jsonapi_diff\DiffResourceObjectNormalizerImpostor
+    decorates: serializer.normalizer.resource_object.jsonapi
+    decoration_priority: -200
+    arguments:
+      - '@jsonapi_diff.normalizer.resource_object.inner'
   jsonapi_diff.tree_builder:
     class: Drupal\jsonapi_diff\Comparison\TreeBuilder
     arguments:
