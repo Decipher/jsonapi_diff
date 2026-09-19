@@ -620,8 +620,9 @@ it did.
   frontend knows how it laid the page out.
 - **No write operations.** The route is `GET` only. Nothing here reverts a revision,
   publishes a draft or edits a field. Core's own routes do that.
-- **No sparse fieldset support, no `include` filtering and no pagination.** The
-  whole tree comes back every time, including the full text of unchanged fields.
+- **No way to ask for less.** Sparse fieldset support, `include` filtering and
+  pagination are all absent, so the whole tree comes back every time, with the
+  full text of unchanged fields in it.
 
 ## For module maintainers
 
