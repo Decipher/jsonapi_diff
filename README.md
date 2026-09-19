@@ -620,8 +620,8 @@ it did.
   frontend knows how it laid the page out.
 - **No write operations.** The route is `GET` only. Nothing here reverts a revision,
   publishes a draft or edits a field. Core's own routes do that.
-- **No sparse fieldsets, includes or pagination.** The whole tree comes back
-  every time, including the full text of unchanged fields.
+- **No sparse fieldset support, no `include` filtering and no pagination.** The
+  whole tree comes back every time, including the full text of unchanged fields.
 
 ## For module maintainers
 
@@ -644,8 +644,8 @@ output.
 **The document shape is alpha.** The tests pin the resource type name, the `id`
 format, the four field statuses, the four child statuses and the `ops` operation
 types, so none of those moves without a red pipeline here first. Treat `meta` as
-open for additional keys, and expect sparse fieldsets before 1.0, which will stop
-the whole tree coming back every time.
+open for additional keys, and expect sparse fieldset support before 1.0, which
+will stop the whole tree coming back every time.
 
 ## FAQ
 
@@ -674,8 +674,8 @@ or set a different Diff plugin for the field.
 
 **A:** Take a `-` and the `+` that follows it, and run a word diff over the two
 line sets in the frontend. Every diff library does this, and doing it in the
-client means the highlighting matches the client's own tokenisation rather than
-Drupal's.
+client means the highlighting follows the client's own word boundaries rather
+than Drupal's.
 
 **Q: What happens to translations?**
 
