@@ -4,3 +4,9 @@ services:
     arguments:
       - '@jsonapi.version_negotiator'
       - '@jsonapi.entity_access_checker'
+  jsonapi_diff.tree_builder:
+    class: Drupal\jsonapi_diff\Comparison\TreeBuilder
+    arguments:
+      - '@diff.entity_comparison'
+      - '@plugin.manager.diff.builder'
+      - '@jsonapi.resource_type.repository'
