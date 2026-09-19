@@ -119,7 +119,7 @@ a node fetched from core's individual route, which core names
 `right` relationships. There is no route here that lists an
 entity's revisions. Core JSON:API does not expose one either.
 
-Errors are the statuses core JSON:API gives the same identifier on its own
+Error statuses match what core JSON:API gives for the same request on its own
 individual route.
 
 | Situation | Status |
@@ -544,8 +544,7 @@ Diff also never compares an entity type's bundle field, its revision field,
 `revision_log` or `revision_uid`, and never compares a field that is not
 revisionable.
 
-A field drops out of the document for one of these reasons, checked in this
-order:
+A field drops out of the document for one of these reasons:
 
 | Cause | Where to fix it |
 | --- | --- |
