@@ -61,7 +61,7 @@ final class DiffResource extends ResourceBase implements ContainerInjectionInter
    * Processes the diff request.
    *
    * @param \Symfony\Component\HttpFoundation\Request $request
-   *   The request. `left` and `right` are read from its query.
+   *   The request. `leftVersion` and `rightVersion` are read from its query.
    * @param \Drupal\jsonapi\ResourceType\ResourceType[] $resource_types
    *   The route resource types. Only the diff type.
    * @param string $entity_type
