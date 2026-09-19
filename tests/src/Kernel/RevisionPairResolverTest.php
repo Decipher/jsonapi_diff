@@ -126,7 +126,7 @@ class RevisionPairResolverTest extends KernelTestBase {
     }
     catch (CacheableBadRequestHttpException $exception) {
       $this->assertSame(400, $exception->getStatusCode());
-      $this->assertContains('url.query_args:left', $exception->getCacheContexts());
+      $this->assertContains('url.query_args:leftVersion', $exception->getCacheContexts());
     }
 
     try {
@@ -135,7 +135,7 @@ class RevisionPairResolverTest extends KernelTestBase {
     }
     catch (CacheableBadRequestHttpException $exception) {
       $this->assertSame(400, $exception->getStatusCode());
-      $this->assertContains('url.query_args:right', $exception->getCacheContexts());
+      $this->assertContains('url.query_args:rightVersion', $exception->getCacheContexts());
     }
   }
 
@@ -152,7 +152,7 @@ class RevisionPairResolverTest extends KernelTestBase {
     }
     catch (CacheableNotFoundHttpException $exception) {
       $this->assertSame(404, $exception->getStatusCode());
-      $this->assertContains('url.query_args:right', $exception->getCacheContexts());
+      $this->assertContains('url.query_args:rightVersion', $exception->getCacheContexts());
     }
 
     $this->expectException(CacheableNotFoundHttpException::class);
@@ -256,7 +256,7 @@ class RevisionPairResolverTest extends KernelTestBase {
     }
     catch (CacheableAccessDeniedHttpException $exception) {
       $this->assertContains('user.permissions', $exception->getCacheContexts());
-      $this->assertContains('url.query_args:right', $exception->getCacheContexts());
+      $this->assertContains('url.query_args:rightVersion', $exception->getCacheContexts());
       $this->assertContains('node:' . $this->node->id(), $exception->getCacheTags());
     }
   }
@@ -268,8 +268,8 @@ class RevisionPairResolverTest extends KernelTestBase {
     $pair = $this->resolver->resolve($this->node, NULL, NULL, $this->owner);
 
     $contexts = $pair->cacheability->getCacheContexts();
-    $this->assertContains('url.query_args:left', $contexts);
-    $this->assertContains('url.query_args:right', $contexts);
+    $this->assertContains('url.query_args:leftVersion', $contexts);
+    $this->assertContains('url.query_args:rightVersion', $contexts);
     $this->assertContains('user.permissions', $contexts);
     $this->assertContains('node:' . $this->node->id(), $pair->cacheability->getCacheTags());
   }
