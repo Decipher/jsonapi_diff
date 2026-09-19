@@ -74,10 +74,6 @@ One route, read-only:
 GET /jsonapi/diff/{entity_type}/{bundle}/{uuid}
 ```
 
-A query parameter names each side. Each holds a core JSON:API resource version
-identifier, the same grammar `resourceVersion` takes on the individual route,
-resolved by the same negotiator.
-
 Drupal's vocabulary for this is unavoidable, so in short:
 
 | Term | Means |
@@ -86,9 +82,9 @@ Drupal's vocabulary for this is unavoidable, so in short:
 | Default revision | The revision Drupal serves when nobody asks for a particular one. On a plain site that is the published one |
 | Working copy | The newest revision of all, published or not. A draft saved over a published page is the working copy while the published revision stays the default |
 
-Nothing forces `left` to be the older side, but the defaults and the names read
-that way: `left` is where the content came from and `right` is where it went, so
-a `+` in `ops` is an addition on the right.
+A query parameter names each side. Each holds a core JSON:API resource version
+identifier, the same grammar `resourceVersion` takes on the individual route,
+resolved by the same negotiator.
 
 | Parameter | Default | Accepts |
 | --- | --- | --- |
@@ -105,6 +101,10 @@ curl -H 'Accept: application/vnd.api+json' \
   https://example.com/jsonapi/diff/node/article/85924444-4579-493c-8658-e654df08ff08
 ```
 
+Nothing forces `left` to be the older side, but the defaults and the names read
+that way: `left` is where the content came from and `right` is where it went, so
+a `+` in `ops` is an addition on the right.
+
 An explicit pair is two identifiers:
 
 ```bash
@@ -114,10 +114,10 @@ curl -H 'Accept: application/vnd.api+json' \
 
 A revision id for the `id:` form comes from `attributes.drupal_internal__vid` on
 a node fetched from core's individual route, which core names
-`drupal_internal__` plus the entity type's revision key, or from
+`drupal_internal__` plus the entity type's revision key. It also comes from
 `drupal_internal__revision_id` in the `meta` of this document's own `left` and
-`right` relationships. There is no route here that lists an
-entity's revisions. Core JSON:API does not expose one either.
+`right` relationships. Nothing here lists an entity's revisions, and core
+JSON:API does not expose a route for that either.
 
 Error statuses match what core JSON:API gives for the same request on its own
 individual route.
