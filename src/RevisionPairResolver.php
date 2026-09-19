@@ -26,12 +26,12 @@ use Drupal\jsonapi\Revisions\VersionNegotiator;
 final readonly class RevisionPairResolver {
 
   /**
-   * The version compared when `left` is absent.
+   * The version compared when `leftVersion` is absent.
    */
   public const string DEFAULT_LEFT = 'rel:latest-version';
 
   /**
-   * The version compared when `right` is absent.
+   * The version compared when `rightVersion` is absent.
    */
   public const string DEFAULT_RIGHT = 'rel:working-copy';
 
@@ -61,8 +61,8 @@ final readonly class RevisionPairResolver {
    */
   public function resolve(ContentEntityInterface $entity, ?string $left, ?string $right, ?AccountInterface $account = NULL): RevisionPair {
     $cacheability = (new CacheableMetadata())->addCacheContexts([
-      'url.query_args:left',
-      'url.query_args:right',
+      'url.query_args:leftVersion',
+      'url.query_args:rightVersion',
       'user.permissions',
     ]);
 
@@ -98,7 +98,7 @@ final readonly class RevisionPairResolver {
    *
    * Core's negotiator already throws cacheable 400 and 404 exceptions. They
    * are rethrown with this route's cacheability added, so a cached error
-   * varies by the `left` and `right` query arguments.
+   * varies by the `leftVersion` and `rightVersion` query arguments.
    */
   private function negotiate(ContentEntityInterface $entity, string $identifier, CacheableMetadata $cacheability): ContentEntityInterface {
     // Core validates the shape before negotiating, so a bare `12` is a 400
