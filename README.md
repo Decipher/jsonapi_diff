@@ -497,10 +497,33 @@ UUID.
 }
 ```
 
-The link is present only when the user could follow it, which is `view` on the
-entity plus `view all revisions`. A user without revision access sees no `diff`
-member, and the decision's cacheability is bubbled into the response, so that
-absence is not cached across users with different access.
+The link is present only when the user could follow it. The provider asks the
+same question the route answers, through the same service: it resolves the two
+default versions and checks read access to both. A link and the route it points
+at cannot disagree, so an absent link is a definite answer rather than a `403`
+waiting to happen.
+
+In practice:
+
+- A node whose newest revision is its published default revision is compared
+  with itself. Anyone who may read the node gets the link, and no revision
+  permission is involved.
+- A node with a newer revision on top needs read access to that revision too.
+  That is `view all revisions` or `view <type> revisions`, plus whatever opens
+  an unpublished revision, such as owning it with `view own unpublished
+  content`. Revision access on its own is not enough.
+- On a site with Content Moderation, `view latest version` applies as well,
+  because core's JSON:API entity access checker applies Content Moderation's
+  latest version rule to a non-default revision.
+
+The decision's cacheability is bubbled into the response, so a link's absence is
+not cached across users with different access.
+
+Exactness is not free. Each resource object costs one version resolution and two
+access checks, measured at about two extra database queries and well under a
+millisecond. A fifty item collection pays about a hundred queries for its fifty
+links. A link that cannot lie is worth that, and a site that disagrees can leave
+JSON:API Hypermedia uninstalled and keep the route.
 
 JSON:API Hypermedia sits in `suggest` rather than in `require`, so Composer
 leaves it alone unless a site asks for it. Without it the route behaves the same

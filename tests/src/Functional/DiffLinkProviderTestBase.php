@@ -12,9 +12,11 @@ use Drupal\user\UserInterface;
 /**
  * The site the discovery link tests share.
  *
- * One published article and two users. The reviewer may read revisions, the
- * viewer may not. The subclass decides whether JSON:API Hypermedia is
- * installed, because that is the only difference the tests measure.
+ * Two articles: one published with a single revision, one published with an
+ * unpublished draft on top. Three users, so the link can be measured against
+ * every answer the diff route gives. The subclass decides whether JSON:API
+ * Hypermedia is installed, because that is the only difference the tests
+ * measure.
  */
 abstract class DiffLinkProviderTestBase extends BrowserTestBase {
 
@@ -53,9 +55,17 @@ abstract class DiffLinkProviderTestBase extends BrowserTestBase {
   protected $defaultTheme = 'stark';
 
   /**
-   * A user who may read every revision.
+   * A user who may read every revision, published or not.
    */
   protected UserInterface $reviewer;
+
+  /**
+   * A user who may read revisions but no unpublished content.
+   *
+   * Revision access alone is not enough to read a draft, so this user can
+   * diff a node that has no draft and cannot diff one that has.
+   */
+  protected UserInterface $revisionReader;
 
   /**
    * A user who may read content but no revision of it.
@@ -63,9 +73,14 @@ abstract class DiffLinkProviderTestBase extends BrowserTestBase {
   protected UserInterface $viewer;
 
   /**
-   * The published article every test reads.
+   * The published article every test reads. It has one revision.
    */
   protected NodeInterface $article;
+
+  /**
+   * A published article with an unpublished draft on top.
+   */
+  protected NodeInterface $drafted;
 
   /**
    * {@inheritdoc}
@@ -78,26 +93,36 @@ abstract class DiffLinkProviderTestBase extends BrowserTestBase {
     // so the new bundle's JSON:API routes exist.
     $this->container->get('router.builder')->rebuild();
 
+    // Node grants decide an unpublished revision per user unless the user
+    // bypasses them, and Dynamic Page Cache will not cache a per user
+    // decision. The reviewer bypasses, so the cache scenarios measure the
+    // link's own cacheability.
     $this->reviewer = $this->asAccount($this->drupalCreateUser([
+      'access content',
+      'bypass node access',
+      'view all revisions',
+    ]));
+    $this->revisionReader = $this->asAccount($this->drupalCreateUser([
       'access content',
       'view all revisions',
     ]));
     $this->viewer = $this->asAccount($this->drupalCreateUser(['access content']));
     $this->article = $this->createArticle(['field_text' => 'published text']);
+    $this->drafted = $this->draft($this->createArticle(['field_text' => 'published text']), ['field_text' => 'draft text']);
   }
 
   /**
-   * The individual route of the shared article.
+   * The individual route of a node, or of the shared article.
    */
-  protected function individualPath(): string {
-    return '/jsonapi/node/article/' . $this->article->uuid();
+  protected function individualPath(?NodeInterface $node = NULL): string {
+    return '/jsonapi/node/article/' . ($node ?? $this->article)->uuid();
   }
 
   /**
-   * The diff route of the shared article, with no query parameters.
+   * The diff route of a node, or of the shared article, with no parameters.
    */
-  protected function diffPath(): string {
-    return '/jsonapi/diff/node/article/' . $this->article->uuid();
+  protected function diffPath(?NodeInterface $node = NULL): string {
+    return '/jsonapi/diff/node/article/' . ($node ?? $this->article)->uuid();
   }
 
   /**
