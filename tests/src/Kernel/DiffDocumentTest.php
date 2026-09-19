@@ -98,10 +98,12 @@ class DiffDocumentTest extends KernelTestBase {
    * Relatable fields normalize as relationships, the rest as attributes.
    */
   public function testRelationshipsAndAttributesAreSplit(): void {
-    $diff = $this->entityDiff($this->uuid, 1, 2, ['title' => new FieldDiff('Title', FieldDiff::CHANGED, 'one', 'two', [
+    $ops = [
       ['type' => '-', 'lines' => ['one']],
       ['type' => '+', 'lines' => ['two']],
-    ])]);
+    ];
+    $fields = ['title' => new FieldDiff('Title', FieldDiff::CHANGED, 'one', 'two', $ops)];
+    $diff = $this->entityDiff($this->uuid, 1, 2, $fields);
     $root = new DiffResourceObject($this->diffType, $this->articleType, $diff, 'rel:latest-version', 'id:2');
 
     $data = $this->normalize($root, [])['data'];
