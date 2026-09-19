@@ -2,6 +2,7 @@
     "require-dev": {
         "behat/mink": "^1.11",
         "behat/mink-browserkit-driver": "^2.2",
+        "cweagans/composer-patches": "^1.7",
         "dealerdirect/phpcodesniffer-composer-installer": "^1.2",
         "drevops/phpcs-standard": "^0.6.2",
         "drupal/coder": "^8 || ^9",
@@ -22,12 +23,17 @@
     },
     "config": {
         "allow-plugins": {
+            "cweagans/composer-patches": true,
             "dealerdirect/phpcodesniffer-composer-installer": true,
             "phpstan/extension-installer": true
         }
     },
     "extra": {
         "phpcodesniffer-search-depth": 10,
-        "patches": {}
+        "patches": {
+            "drupal/jsonapi_hypermedia": {
+                "PHP 8.4 compatibility fixes to AccessRestrictedLink (https://www.drupal.org/i/3526924)": "patches/jsonapi_hypermedia-php-84-compatibility-3526924.patch"
+            }
+        }
     }
 }
