@@ -95,6 +95,7 @@
         "twigcs",
         "twigcsfixer",
         "updatedb",
+        "versionable",
         "vfsstream",
         "vincentlanglet",
         "webdriver",

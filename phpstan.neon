@@ -30,6 +30,17 @@ parameters:
 
   ignoreErrors:
     -
+      # The diff document is built from core's JSON:API value objects, which
+      # are all @internal. Relationship's constructor is protected, so a
+      # relationship that carries meta on its identifiers can only be made by
+      # extending it. This is the pattern jsonapi_resources itself ships, in
+      # ResourceObjectRelationship and its own test resource objects. Named
+      # class by class, so no other extension of an @internal class is hidden.
+      messages:
+        - '#^Class Drupal\\jsonapi_diff\\JsonApiResource\\DiffRelationship extends @internal class Drupal\\jsonapi\\JsonApiResource\\Relationship\.$#'
+        - '#^Class Drupal\\jsonapi_diff\\JsonApiResource\\DiffResourceObject extends @internal class Drupal\\jsonapi\\JsonApiResource\\ResourceObject\.$#'
+      reportUnmatched: false
+    -
       # Hook implementations do not provide docblocks for parameters, so there
       # is no way to provide this information.
       messages:
