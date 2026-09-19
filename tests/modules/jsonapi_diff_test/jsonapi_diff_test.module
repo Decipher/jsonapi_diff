@@ -1,0 +1,24 @@
+<?php
+
+/**
+ * @file
+ * Restricts, aliases and disables fields, for testing.
+ */
+
+declare(strict_types=1);
+
+use Drupal\Core\Access\AccessResult;
+use Drupal\Core\Access\AccessResultInterface;
+use Drupal\Core\Field\FieldDefinitionInterface;
+use Drupal\Core\Field\FieldItemListInterface;
+use Drupal\Core\Session\AccountInterface;
+
+/**
+ * Implements hook_entity_field_access().
+ */
+function jsonapi_diff_test_entity_field_access(string $operation, FieldDefinitionInterface $field_definition, AccountInterface $account, ?FieldItemListInterface $items = NULL): AccessResultInterface {
+  if ($operation === 'view' && $field_definition->getName() === 'field_secret') {
+    return AccessResult::forbidden('The field is restricted for testing.');
+  }
+  return AccessResult::neutral();
+}

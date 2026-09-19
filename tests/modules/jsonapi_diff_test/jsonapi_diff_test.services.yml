@@ -1,0 +1,5 @@
+services:
+  jsonapi_diff_test.resource_type_build_subscriber:
+    class: Drupal\jsonapi_diff_test\EventSubscriber\ResourceTypeBuildSubscriber
+    tags:
+      - { name: event_subscriber }

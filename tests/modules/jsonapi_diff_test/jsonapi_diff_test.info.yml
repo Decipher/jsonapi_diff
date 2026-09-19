@@ -1,0 +1,7 @@
+name: 'JSON:API Diff test'
+type: module
+description: 'Restricts, aliases and disables fields, for testing.'
+package: Testing
+core_version_requirement: ^10.5 || ^11
+dependencies:
+  - jsonapi_diff:jsonapi_diff
