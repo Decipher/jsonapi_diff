@@ -197,6 +197,28 @@ class DiffDocumentTest extends KernelTestBase {
   }
 
   /**
+   * The map attributes encode as objects when they hold nothing.
+   *
+   * PHP encodes an empty array as `[]`, so the assertions are made on the
+   * encoded string and on the decoded objects. A PHP-side comparison cannot
+   * tell an empty map from an empty list.
+   */
+  public function testEmptyFieldsEncodeAsAnObject(): void {
+    $root = new DiffResourceObject($this->diffType, $this->articleType, $this->entityDiff($this->uuid, 1, 2), 'id:1', 'id:2');
+    $document = new JsonApiDocumentTopLevel(new ResourceObjectData([$root], 1), new IncludedData([]), new LinkCollection([]));
+
+    $normalization = $this->container->get('jsonapi.serializer')->normalize($document, 'api_json', []);
+    $this->assertInstanceOf(CacheableNormalization::class, $normalization);
+    $json = (string) json_encode($normalization->getNormalization());
+
+    $this->assertStringContainsString('"fields":{}', $json);
+    $this->assertStringNotContainsString('"fields":[]', $json);
+    $decoded = json_decode($json, FALSE);
+    $this->assertInstanceOf(\stdClass::class, $decoded->data->attributes->fields);
+    $this->assertInstanceOf(\stdClass::class, $decoded->data->attributes->summary);
+  }
+
+  /**
    * The normalization carries the diff's cacheability and the contexts.
    */
   public function testNormalizationCacheability(): void {

@@ -50,6 +50,26 @@ trait DiffContentTrait {
   }
 
   /**
+   * Creates a paragraph type whose only field references paragraphs.
+   *
+   * A group holds nothing of its own. Every field it has is recursed into,
+   * so its diff reports no fields at all.
+   */
+  protected function createGroupParagraphType(): void {
+    ParagraphsType::create(['id' => 'group', 'label' => 'Group'])->save();
+    $this->createParagraphField('paragraph', 'group', 'field_items', 'Items');
+  }
+
+  /**
+   * Creates and saves a group paragraph holding the given paragraphs.
+   */
+  protected function createGroup(ParagraphInterface ...$children): ParagraphInterface {
+    $paragraph = Paragraph::create(['type' => 'group', 'field_items' => $this->references(...$children)]);
+    $paragraph->save();
+    return $paragraph;
+  }
+
+  /**
    * Creates a text field and shows it in the default view display.
    */
   protected function createTextField(string $entity_type_id, string $bundle, string $name, string $label, int $cardinality = 1): void {
