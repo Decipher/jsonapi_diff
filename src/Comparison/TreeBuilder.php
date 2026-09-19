@@ -26,7 +26,7 @@ use Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface;
  * discards, attributes each flat entry to its entity, and turns the compared
  * strings into line operations.
  */
-final class TreeBuilder {
+final readonly class TreeBuilder {
 
   /**
    * Cache tags of the Diff configuration that decides what is compared.
@@ -34,9 +34,9 @@ final class TreeBuilder {
   private const array CONFIG_CACHE_TAGS = ['config:diff.plugins', 'config:diff.settings'];
 
   public function __construct(
-    private readonly DiffEntityComparison $entityComparison,
-    private readonly DiffBuilderManager $builderManager,
-    private readonly ResourceTypeRepositoryInterface $resourceTypeRepository,
+    private DiffEntityComparison $diffEntityComparison,
+    private DiffBuilderManager $diffBuilderManager,
+    private ResourceTypeRepositoryInterface $resourceTypeRepository,
   ) {}
 
   /**
@@ -51,7 +51,7 @@ final class TreeBuilder {
    *   The root diff. Its cacheability covers the whole tree.
    */
   public function build(ContentEntityInterface $left, ContentEntityInterface $right): EntityDiff {
-    $flat = $this->entityComparison->compareRevisions($left, $right);
+    $flat = $this->diffEntityComparison->compareRevisions($left, $right);
     return $this->buildEntity($left, $right, $flat, new CacheableMetadata(), TRUE);
   }
 
@@ -76,19 +76,13 @@ final class TreeBuilder {
 
     $cacheability = (new CacheableMetadata())->addCacheTags(self::CONFIG_CACHE_TAGS);
     foreach ([$left, $right] as $side) {
-      if ($side !== NULL) {
+      if ($side instanceof ContentEntityInterface) {
         $cacheability->addCacheableDependency($side);
       }
     }
     $collector->addCacheableDependency($cacheability);
 
     $fields = [];
-    $summary = [
-      FieldDiff::ADDED => 0,
-      FieldDiff::REMOVED => 0,
-      FieldDiff::CHANGED => 0,
-      FieldDiff::SAME => 0,
-    ];
     $prefix = $entity->id() . ':' . $entity->getEntityTypeId() . '.';
     foreach ($flat as $key => $entry) {
       if (!str_starts_with($key, $prefix)) {
@@ -104,12 +98,18 @@ final class TreeBuilder {
         $label,
         (string) $entry['#data']['#left'],
         (string) $entry['#data']['#right'],
-        $left === NULL,
-        $right === NULL,
+        !$left instanceof ContentEntityInterface,
+        !$right instanceof ContentEntityInterface,
       );
       $fields[$resource_type->getPublicName($name)] = $field;
-      $summary[$field->status]++;
     }
+    $counts = array_count_values(array_map(static fn (FieldDiff $field): string => $field->status, $fields));
+    $summary = [
+      FieldDiff::ADDED => $counts[FieldDiff::ADDED] ?? 0,
+      FieldDiff::REMOVED => $counts[FieldDiff::REMOVED] ?? 0,
+      FieldDiff::CHANGED => $counts[FieldDiff::CHANGED] ?? 0,
+      FieldDiff::SAME => $counts[FieldDiff::SAME] ?? 0,
+    ];
 
     $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector);
 
@@ -117,8 +117,8 @@ final class TreeBuilder {
       $entity->getEntityTypeId(),
       $entity->bundle(),
       (string) $entity->uuid(),
-      $left !== NULL ? (int) $left->getRevisionId() : NULL,
-      $right !== NULL ? (int) $right->getRevisionId() : NULL,
+      $left instanceof ContentEntityInterface ? (int) $left->getRevisionId() : NULL,
+      $right instanceof ContentEntityInterface ? (int) $right->getRevisionId() : NULL,
       $fields,
       $summary,
       $children,
@@ -162,7 +162,7 @@ final class TreeBuilder {
    *   The operations in order.
    */
   private function buildOps(string $left, string $right): array {
-    $diff = new Diff(self::lines($left), self::lines($right));
+    $diff = new Diff($this->lines($left), $this->lines($right));
     $ops = [];
     foreach ($diff->getEdits() as $edit) {
       if ($edit instanceof DiffOpCopy) {
@@ -188,7 +188,7 @@ final class TreeBuilder {
    * @return list<string>
    *   The lines.
    */
-  private static function lines(string $value): array {
+  private function lines(string $value): array {
     return $value === '' ? [] : explode("\n", $value);
   }
 
@@ -214,10 +214,10 @@ final class TreeBuilder {
       if (!$resource_type->isFieldEnabled($name)) {
         continue;
       }
-      if (!$this->builderManager->showDiff($definition->getFieldStorageDefinition())) {
+      if (!$this->diffBuilderManager->showDiff($definition->getFieldStorageDefinition())) {
         continue;
       }
-      $plugin = $this->builderManager->createInstanceForFieldDefinition($definition);
+      $plugin = $this->diffBuilderManager->createInstanceForFieldDefinition($definition);
       if (!$plugin instanceof FieldReferenceInterface) {
         continue;
       }
@@ -249,7 +249,7 @@ final class TreeBuilder {
    *   Delta and entity, keyed by entity id, in delta order.
    */
   private function childrenOfSide(FieldReferenceInterface $plugin, ?ContentEntityInterface $side, string $name): array {
-    if ($side === NULL || !$side->hasField($name)) {
+    if (!$side instanceof ContentEntityInterface || !$side->hasField($name)) {
       return [];
     }
     $items = $side->get($name);

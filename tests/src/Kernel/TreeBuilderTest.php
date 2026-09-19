@@ -100,8 +100,7 @@ class TreeBuilderTest extends KernelTestBase {
     $this->assertSame((int) $left->getRevisionId(), $diff->leftRevisionId);
     $this->assertSame((int) $right->getRevisionId(), $diff->rightRevisionId);
 
-    $field = $diff->fields["field_text"];
-    $this->assertInstanceOf(FieldDiff::class, $field);
+    $field = $diff->fields['field_text'];
     $this->assertSame('Text', $field->label);
     $this->assertSame(FieldDiff::CHANGED, $field->status);
     $this->assertSame('first draft', $field->left);
