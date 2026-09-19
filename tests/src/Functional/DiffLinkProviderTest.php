@@ -38,8 +38,10 @@ class DiffLinkProviderTest extends DiffLinkProviderTestBase {
 
     $collection = $this->fetch('/jsonapi/node/article');
     $this->assertSession()->statusCodeEquals(200);
-    $this->assertCount(1, $collection['data']);
-    $this->assertSame($expected, $collection['data'][0]['links']['diff']['href']);
+    $this->assertCount(2, $collection['data']);
+    foreach ($collection['data'] as $object) {
+      $this->assertArrayHasKey('diff', $object['links']);
+    }
   }
 
   /**
@@ -61,16 +63,56 @@ class DiffLinkProviderTest extends DiffLinkProviderTestBase {
   }
 
   /**
-   * A user without revision access gets no link.
+   * A user who cannot read the draft gets no link to it.
+   *
+   * Revision access alone does not open an unpublished revision, so the
+   * diff route answers 403. The link has to agree with that.
+   */
+  public function testTheLinkIsAbsentWhenTheDraftCannotBeRead(): void {
+    $this->drupalLogin($this->revisionReader);
+
+    $document = $this->fetch($this->individualPath($this->drafted));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertArrayNotHasKey('diff', $document['data']['links']);
+
+    $this->fetch($this->diffPath($this->drafted));
+    $this->assertSession()->statusCodeEquals(403);
+  }
+
+  /**
+   * A user without revision access gets no link to a node with a draft.
    */
   public function testTheLinkIsAbsentWithoutRevisionAccess(): void {
+    $this->drupalLogin($this->viewer);
+
+    $document = $this->fetch($this->individualPath($this->drafted));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertArrayHasKey('working-copy', $document['data']['links']);
+    $this->assertArrayNotHasKey('diff', $document['data']['links']);
+
+    $this->fetch($this->diffPath($this->drafted));
+    $this->assertSession()->statusCodeEquals(403);
+  }
+
+  /**
+   * Without a newer revision the link needs no revision access at all.
+   *
+   * Both sides are then the published default revision, which anyone who
+   * may read the node may read. The route says 200, so the link is offered.
+   */
+  public function testTheLinkIsPresentWhenNoRevisionAccessIsNeeded(): void {
     $this->drupalLogin($this->viewer);
 
     $document = $this->fetch($this->individualPath());
 
     $this->assertSession()->statusCodeEquals(200);
-    $this->assertArrayHasKey('working-copy', $document['data']['links']);
-    $this->assertArrayNotHasKey('diff', $document['data']['links']);
+    $this->assertArrayHasKey('diff', $document['data']['links']);
+
+    $followed = $this->fetch($document['data']['links']['diff']['href']);
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertSame('same', $followed['data']['attributes']['fields']['field_text']['status']);
   }
 
   /**
@@ -90,7 +132,7 @@ class DiffLinkProviderTest extends DiffLinkProviderTestBase {
    * A response cached without the link is not served to a user who gets it.
    */
   public function testTheLinkIsNotCachedAcrossUsers(): void {
-    $path = $this->individualPath();
+    $path = $this->individualPath($this->drafted);
 
     $this->drupalLogin($this->viewer);
     $without = $this->fetch($path);

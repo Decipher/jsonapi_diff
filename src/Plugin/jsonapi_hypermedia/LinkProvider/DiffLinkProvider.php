@@ -4,12 +4,17 @@ declare(strict_types=1);
 
 namespace Drupal\jsonapi_diff\Plugin\jsonapi_hypermedia\LinkProvider;
 
+use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Entity\EntityRepositoryInterface;
+use Drupal\Core\Http\Exception\CacheableAccessDeniedHttpException;
+use Drupal\Core\Http\Exception\CacheableBadRequestHttpException;
+use Drupal\Core\Http\Exception\CacheableNotFoundHttpException;
 use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
 use Drupal\Core\Url;
 use Drupal\jsonapi\JsonApiResource\ResourceObject;
+use Drupal\jsonapi_diff\RevisionPairResolver;
 use Drupal\jsonapi_hypermedia\AccessRestrictedLink;
 use Drupal\jsonapi_hypermedia\Plugin\LinkProviderBase;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -41,11 +46,17 @@ final class DiffLinkProvider extends LinkProviderBase implements ContainerFactor
   protected EntityRepositoryInterface $entityRepository;
 
   /**
+   * The resolver the diff route itself uses.
+   */
+  protected RevisionPairResolver $revisionPairResolver;
+
+  /**
    * {@inheritdoc}
    */
   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition): self {
     $provider = new self($configuration, $plugin_id, $plugin_definition);
     $provider->entityRepository = $container->get('entity.repository');
+    $provider->revisionPairResolver = $container->get('jsonapi_diff.revision_pair_resolver');
     return $provider;
   }
 
@@ -76,13 +87,22 @@ final class DiffLinkProvider extends LinkProviderBase implements ContainerFactor
       return AccessRestrictedLink::createInaccessibleLink($cacheability);
     }
 
-    // The diff compares two revisions, so reading one is not enough. These
-    // are the two operations core JSON:API checks for a non-default version.
-    // Access result objects, so the decision's cacheability travels with it.
-    // @see \Drupal\jsonapi\Access\EntityAccessChecker::checkEntityAccess()
-    $access = $entity->access('view', NULL, TRUE)
-      ->andIf($entity->access('view all revisions', NULL, TRUE));
+    // The question the link answers is the question the route answers, so it
+    // is asked of the same service with the same defaults. Anything cheaper
+    // is an approximation, and an approximation disagrees: a draft the user
+    // may not read, or content moderation's latest version rule, both offer
+    // a link that then returns 403. The decision's cacheability travels with
+    // it either way, so nothing is cached across users.
+    try {
+      $pair = $this->revisionPairResolver->resolve($entity, NULL, NULL);
+    }
+    catch (CacheableAccessDeniedHttpException | CacheableBadRequestHttpException | CacheableNotFoundHttpException $exception) {
+      return AccessRestrictedLink::createInaccessibleLink((new CacheableMetadata())
+        ->addCacheableDependency($cacheability)
+        ->addCacheableDependency($exception));
+    }
 
+    $access = AccessResult::allowed()->addCacheableDependency($pair->cacheability);
     $url = Url::fromRoute('jsonapi_diff.diff', [
       'entity_type' => $entity->getEntityTypeId(),
       'bundle' => $entity->bundle(),
