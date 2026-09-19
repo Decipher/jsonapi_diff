@@ -516,10 +516,17 @@ released version. The class is not loaded until a provider returns a link, which
 is why a site can install the module and see nothing wrong until the first
 provider is added.
 
+A running site is not broken by this. A deprecation is a notice, so the
+discovery link works on PHP 8.4 against the released version, which has been
+confirmed against a real site. It is a test suite that fails, because Drupal
+turns the same notice into an exception while testing.
+
 The fix is merged on `8.x-1.x` and not yet in a release. See
-<https://www.drupal.org/i/3526924>. Until one carries it, a site on PHP 8.4 needs
-the dev branch or that patch applied to 1.10. A site on PHP 8.3 is unaffected,
-and so is a site that does not install JSON:API Hypermedia at all.
+<https://www.drupal.org/i/3526924>. So a site on PHP 8.4 can install 1.10 as it
+is, and a module whose tests exercise a link provider wants the dev branch or
+that patch. This module's own development build carries the patch for that
+reason. A site on PHP 8.3 is unaffected, and so is a site that does not install
+JSON:API Hypermedia at all.
 
 ## Which fields are compared
 
