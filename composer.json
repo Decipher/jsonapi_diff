@@ -1,0 +1,25 @@
+{
+    "name": "drupal/jsonapi_diff",
+    "description": "Exposes the difference between two revisions of an entity as a JSON:API document.",
+    "type": "drupal-module",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "Stuart Clark",
+            "homepage": "https://www.drupal.org/u/deciphered",
+            "role": "Maintainer"
+        }
+    ],
+    "require": {
+        "php": ">=8.3",
+        "drupal/diff": "^2.1",
+        "drupal/jsonapi_resources": "^1.0"
+    },
+    "require-dev": {
+        "drupal/jsonapi_hypermedia": "^1.10",
+        "drupal/paragraphs": "^1.19"
+    },
+    "suggest": {
+        "drupal/jsonapi_hypermedia": "Adds a diff link to every revisionable resource object, so a client discovers the diff route instead of building the URL."
+    }
+}

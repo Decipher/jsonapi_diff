@@ -1,0 +1,8 @@
+<?php
+
+/**
+ * @file
+ * Exposes the difference between two revisions of an entity over JSON:API.
+ */
+
+declare(strict_types=1);

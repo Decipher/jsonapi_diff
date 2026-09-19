@@ -1,0 +1,9 @@
+name: 'JSON:API Diff'
+type: module
+description: 'Exposes the difference between two revisions of an entity as a JSON:API document.'
+package: 'Web services'
+core_version_requirement: ^10.5 || ^11
+dependencies:
+  - drupal:jsonapi
+  - diff:diff
+  - jsonapi_resources:jsonapi_resources
