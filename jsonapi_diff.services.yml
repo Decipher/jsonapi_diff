@@ -1,0 +1,6 @@
+services:
+  jsonapi_diff.revision_pair_resolver:
+    class: Drupal\jsonapi_diff\RevisionPairResolver
+    arguments:
+      - '@jsonapi.version_negotiator'
+      - '@jsonapi.entity_access_checker'
