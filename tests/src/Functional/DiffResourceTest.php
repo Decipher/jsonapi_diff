@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\jsonapi_diff\Functional;
 
+use Drupal\Core\Session\AnonymousUserSession;
 use Drupal\language\Entity\ConfigurableLanguage;
 use Drupal\node\NodeInterface;
 use Drupal\Tests\BrowserTestBase;
@@ -176,6 +177,34 @@ class DiffResourceTest extends BrowserTestBase {
     $this->assertCount(1, $diffs);
     $this->assertInstanceOf(\stdClass::class, $diffs[0]->attributes->fields);
     $this->assertSame([], get_object_vars($diffs[0]->attributes->fields));
+  }
+
+  /**
+   * A visitor who may read the node cannot read a block it may not view.
+   *
+   * Both default versions resolve to the published revision, so the node
+   * itself is served. The unpublished block inside it is not, and neither
+   * are its values, anywhere in the body.
+   */
+  public function testDeniedChildIsAbsentForAnonymous(): void {
+    $shown = $this->createBlock('shown block');
+    $denied = $this->createUnpublishedBlock('denied block');
+    $node = $this->createArticle([
+      'field_text' => 'published text',
+      'field_blocks' => $this->references($shown, $denied),
+      'uid' => $this->editor->id(),
+    ]);
+    $this->assertFalse($denied->access('view', new AnonymousUserSession()));
+
+    $body = $this->drupalGet($this->path($node), [], self::HEADERS);
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertStringNotContainsString('denied block', $body);
+    $this->assertStringNotContainsString((string) $denied->uuid(), $body);
+    $document = json_decode($body, TRUE);
+    $this->assertCount(1, $document['included']);
+    $this->assertStringStartsWith($shown->uuid() . ':', $document['included'][0]['id']);
+    $this->assertSame('shown block', $document['included'][0]['attributes']['fields']['field_body']['left']);
   }
 
   /**

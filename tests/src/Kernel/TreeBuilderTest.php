@@ -7,6 +7,7 @@ namespace Drupal\Tests\jsonapi_diff\Kernel;
 use Drupal\Core\Entity\Entity\EntityViewDisplay;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
+use Drupal\jsonapi\JsonApiResource\LabelOnlyResourceObject;
 use Drupal\jsonapi_diff\Comparison\ChildDiff;
 use Drupal\jsonapi_diff\Comparison\EntityDiff;
 use Drupal\jsonapi_diff\Comparison\FieldDiff;
@@ -19,6 +20,7 @@ use Drupal\node\NodeInterface;
 use Drupal\paragraphs\Entity\Paragraph;
 use Drupal\paragraphs\Entity\ParagraphsType;
 use Drupal\paragraphs\ParagraphInterface;
+use Drupal\Tests\user\Traits\UserCreationTrait;
 use PHPUnit\Framework\Attributes\Group;
 
 /**
@@ -32,6 +34,8 @@ use PHPUnit\Framework\Attributes\Group;
  */
 #[Group('jsonapi_diff')]
 class TreeBuilderTest extends KernelTestBase {
+
+  use UserCreationTrait;
 
   /**
    * {@inheritdoc}
@@ -68,7 +72,11 @@ class TreeBuilderTest extends KernelTestBase {
     $this->installEntitySchema('node');
     $this->installEntitySchema('paragraph');
     $this->installSchema('node', ['node_access']);
-    $this->installConfig(['system', 'node', 'diff']);
+    $this->installConfig(['system', 'user', 'node', 'diff']);
+    // A paragraph inherits its parent's view access, so the reader needs
+    // what core asks for to read a published node and its revisions. The
+    // denials the tests prove are the paragraph's own.
+    $this->setUpCurrentUser([], ['access content', 'view all revisions']);
 
     NodeType::create(['type' => 'article', 'name' => 'Article'])->save();
     ParagraphsType::create(['id' => 'block', 'label' => 'Block'])->save();
@@ -334,7 +342,160 @@ class TreeBuilderTest extends KernelTestBase {
     $this->assertContains('paragraph:' . $first->id(), $first_tags);
     $this->assertContains('config:diff.plugins', $first_tags);
     $this->assertNotContains('paragraph:' . $second->id(), $first_tags);
-    $this->assertNotContains('node:' . $node->id(), $first_tags);
+    // A paragraph inherits its parent's view access, so the node the access
+    // decision read is part of the child's own cacheability.
+    $this->assertContains('node:' . $node->id(), $first_tags);
+  }
+
+  /**
+   * A child the user may not view is absent, and an allowed one stays.
+   */
+  public function testDeniedChildIsAbsent(): void {
+    $shown = $this->createParagraph('block', ['field_body' => 'shown body']);
+    $denied = $this->createParagraph('block', ['field_body' => 'denied body', 'status' => 0]);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($shown, $denied)]);
+    $this->reviseParagraph($shown, ['field_body' => 'shown body, edited']);
+    $this->reviseParagraph($denied, ['field_body' => 'denied body, edited']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($shown, $denied)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertNotContains($denied->uuid(), $this->uuids($diff));
+    $this->assertStringNotContainsString('denied body', $this->values($diff));
+    $this->assertCount(1, $diff->children);
+    $shown_child = $this->childFor($diff, $shown);
+    $this->assertSame(0, $shown_child->leftDelta);
+    $this->assertSame(0, $shown_child->rightDelta);
+    $this->assertSame(FieldDiff::CHANGED, $shown_child->diff->fields['field_body']->status);
+    // The parent counts its own fields only, and the dropped child changed
+    // none of them.
+    $this->assertSame(0, $diff->summary['changed']);
+    $this->assertSame(count($diff->fields), array_sum($diff->summary));
+  }
+
+  /**
+   * A denied child keeps the delta of the child that is still shown.
+   *
+   * The deltas locate a child in the parent's field. Dropping the child at
+   * delta 0 must not renumber the child at delta 1.
+   */
+  public function testDroppedChildDoesNotRenumberTheRest(): void {
+    $denied = $this->createParagraph('block', ['field_body' => 'denied body', 'status' => 0]);
+    $shown = $this->createParagraph('block', ['field_body' => 'shown body']);
+    $node = $this->createNode(['field_blocks' => $this->references($denied, $shown)]);
+    $this->reviseParagraph($denied);
+    $this->reviseParagraph($shown);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($shown, $denied)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(1, $diff->children);
+    $shown_child = $this->childFor($diff, $shown);
+    $this->assertSame(1, $shown_child->leftDelta);
+    $this->assertSame(0, $shown_child->rightDelta);
+    $this->assertSame(ChildDiff::MOVED, $shown_child->status);
+  }
+
+  /**
+   * A denied child inside an allowed child is absent, the allowed one stays.
+   */
+  public function testDeniedChildNestedDeeperIsAbsent(): void {
+    $denied = $this->createParagraph('block', ['field_body' => 'denied body', 'status' => 0]);
+    $group = $this->createParagraph('group', ['field_items' => $this->references($denied)]);
+    $node = $this->createNode(['field_blocks' => $this->references($group)]);
+    $this->reviseParagraph($denied, ['field_body' => 'denied body, edited']);
+    $this->reviseParagraph($group, ['field_items' => $this->references($denied)]);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($group)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertNotContains($denied->uuid(), $this->uuids($diff));
+    $this->assertStringNotContainsString('denied body', $this->values($diff));
+    $this->assertCount(1, $diff->children);
+    $group_child = $this->childFor($diff, $group);
+    $this->assertSame([], $group_child->diff->children);
+  }
+
+  /**
+   * A label-only access result is a denial, as it is for the root.
+   *
+   * An unpublished paragraph that is its own default revision is the case
+   * core answers with a label-only resource object: view is denied, the
+   * label is not. One node revision compared with itself points both sides
+   * at that paragraph revision, so neither side is a hard denial.
+   */
+  public function testLabelOnlyChildIsDenied(): void {
+    $denied = $this->createParagraph('block', ['field_body' => 'denied body', 'status' => 0]);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($denied)]);
+    $revision = $this->loadNodeRevision((int) $node->getRevisionId());
+    $this->assertSame([(int) $denied->getRevisionId()], $this->targetRevisions($revision));
+    $checked = $this->container->get('jsonapi_diff_test.entity_access_checker')->getAccessCheckedResourceObject($denied);
+    $this->assertInstanceOf(LabelOnlyResourceObject::class, $checked);
+
+    $diff = $this->builder->build($revision, $revision);
+
+    $this->assertSame([], $diff->children);
+    $this->assertStringNotContainsString('denied body', $this->values($diff));
+  }
+
+  /**
+   * A child denied on one side only is absent from both sides.
+   */
+  public function testChildDeniedOnOneSideIsAbsentFromBoth(): void {
+    $child = $this->createParagraph('block', ['field_body' => 'published body']);
+    $node = $this->createNode(['field_blocks' => $this->references($child)]);
+    $child->set('field_body', 'unpublished body');
+    $child->setUnpublished();
+    $this->reviseParagraph($child);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($child)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertSame([], $diff->children);
+    $this->assertStringNotContainsString('published body', $this->values($diff));
+  }
+
+  /**
+   * Lists the paragraph revisions a node revision's blocks point at.
+   *
+   * @return list<int>
+   *   The target revision ids, in delta order.
+   */
+  protected function targetRevisions(NodeInterface $revision): array {
+    return array_values(array_map(
+      static fn (array $item): int => (int) $item['target_revision_id'],
+      $revision->get('field_blocks')->getValue(),
+    ));
+  }
+
+  /**
+   * Collects every compared value in a tree, at any depth.
+   */
+  protected function values(EntityDiff $diff): string {
+    $values = [];
+    foreach ($diff->fields as $field) {
+      $values[] = $field->label;
+      $values[] = $field->left;
+      $values[] = $field->right;
+    }
+    foreach ($diff->children as $child) {
+      $values[] = $this->values($child->diff);
+    }
+    return implode("\n", $values);
+  }
+
+  /**
+   * Collects the UUID of every entity in a tree, at any depth.
+   *
+   * @return list<string>
+   *   The UUIDs.
+   */
+  protected function uuids(EntityDiff $diff): array {
+    $uuids = [$diff->uuid];
+    foreach ($diff->children as $child) {
+      $uuids = array_merge($uuids, $this->uuids($child->diff));
+    }
+    return $uuids;
   }
 
   /**

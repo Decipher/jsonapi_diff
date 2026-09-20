@@ -2,14 +2,26 @@
 
 /**
  * @file
- * Restricts, aliases and disables fields, for testing.
+ * Restricts, aliases and disables fields and resource types, for testing.
  */
 
 declare(strict_types=1);
 
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Access\AccessResultInterface;
+use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Field\FieldDefinitionInterface;
+use Drupal\jsonapi_diff_test\TestParagraphAccessControlHandler;
+
+/**
+ * Implements hook_entity_type_alter().
+ */
+function jsonapi_diff_test_entity_type_alter(array &$entity_types): void {
+  $paragraph = $entity_types['paragraph'] ?? NULL;
+  if ($paragraph instanceof EntityTypeInterface) {
+    $paragraph->setAccessClass(TestParagraphAccessControlHandler::class);
+  }
+}
 
 /**
  * Implements hook_entity_field_access().

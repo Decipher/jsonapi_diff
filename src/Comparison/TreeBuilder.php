@@ -16,6 +16,7 @@ use Drupal\diff\DiffEntityComparison;
 use Drupal\diff\FieldReferenceInterface;
 use Drupal\jsonapi\ResourceType\ResourceType;
 use Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface;
+use Drupal\jsonapi_diff\Access\EntityViewCheck;
 
 /**
  * Builds the comparison tree for a pair of revisions.
@@ -37,6 +38,7 @@ final readonly class TreeBuilder {
     private DiffEntityComparison $diffEntityComparison,
     private DiffBuilderManager $diffBuilderManager,
     private ResourceTypeRepositoryInterface $resourceTypeRepository,
+    private EntityViewCheck $entityViewCheck,
   ) {}
 
   /**
@@ -201,7 +203,9 @@ final readonly class TreeBuilder {
    * flat result.
    *
    * Children are matched across sides by entity id. Left children come
-   * first, in delta order, then children only the right side has.
+   * first, in delta order, then children only the right side has. A child
+   * the user may not view on one side is dropped from both, so an entity is
+   * never reported as added or removed because access to it changed.
    *
    * @return list<\Drupal\jsonapi_diff\Comparison\ChildDiff>
    *   The children.
@@ -221,8 +225,14 @@ final readonly class TreeBuilder {
       if (!$plugin instanceof FieldReferenceInterface) {
         continue;
       }
-      $left_children = $this->childrenOfSide($plugin, $left, $name);
-      $right_children = $this->childrenOfSide($plugin, $right, $name);
+      $denied = [];
+      $left_children = $this->childrenOfSide($plugin, $left, $name, $collector, $denied);
+      $right_children = $this->childrenOfSide($plugin, $right, $name, $collector, $denied);
+      if ($left_children === NULL || $right_children === NULL) {
+        continue;
+      }
+      $left_children = array_diff_key($left_children, $denied);
+      $right_children = array_diff_key($right_children, $denied);
       $public_name = $resource_type->getPublicName($name);
 
       foreach ($left_children as $id => [$left_delta, $left_child]) {
@@ -245,24 +255,55 @@ final readonly class TreeBuilder {
   /**
    * Lists the entities one side references through a field.
    *
-   * @return array<int|string, array{int, \Drupal\Core\Entity\ContentEntityInterface}>
-   *   Delta and entity, keyed by entity id, in delta order.
+   * Every candidate is access checked here, where it is produced, so an
+   * entity the user may not view never enters the tree and cannot be
+   * attributed a field value anywhere. Its id is recorded, so the other
+   * side drops it too.
+   *
+   * @param \Drupal\diff\FieldReferenceInterface $plugin
+   *   The Diff builder plugin of the reference field.
+   * @param \Drupal\Core\Entity\ContentEntityInterface|null $side
+   *   The revision of this side, or NULL when the side lacks the entity.
+   * @param string $name
+   *   The field name.
+   * @param \Drupal\Core\Cache\CacheableMetadata $collector
+   *   Collects the cacheability of every access decision taken here.
+   * @param array<int|string, true> $denied
+   *   Ids of the children no side may serve. Added to by this method.
+   *
+   * @return array<int|string, array{int, \Drupal\Core\Entity\ContentEntityInterface}>|null
+   *   Delta and entity, keyed by entity id, in delta order. NULL when the
+   *   field itself may not be viewed, which drops it from both sides.
    */
-  private function childrenOfSide(FieldReferenceInterface $plugin, ?ContentEntityInterface $side, string $name): array {
+  private function childrenOfSide(FieldReferenceInterface $plugin, ?ContentEntityInterface $side, string $name, CacheableMetadata $collector, array &$denied): ?array {
     if (!$side instanceof ContentEntityInterface || !$side->hasField($name)) {
       return [];
     }
     $items = $side->get($name);
     if (!$items->access('view')) {
-      return [];
+      return NULL;
     }
     $children = [];
     foreach ($plugin->getEntitiesToDiff($items) as $delta => $child) {
-      if ($child instanceof ContentEntityInterface) {
-        $children[$child->id()] = [(int) $delta, $child];
+      if (!$child instanceof ContentEntityInterface) {
+        continue;
       }
+      if (!$this->isServable($child, $collector)) {
+        $denied[$child->id()] = TRUE;
+        continue;
+      }
+      $children[$child->id()] = [(int) $delta, $child];
     }
     return $children;
+  }
+
+  /**
+   * Decides whether one child entity may appear in the document.
+   *
+   * The rule is the one the compared revisions are judged by.
+   */
+  private function isServable(ContentEntityInterface $child, CacheableMetadata $collector): bool {
+    return $this->entityViewCheck->isViewable($child, NULL, $collector);
   }
 
 }
