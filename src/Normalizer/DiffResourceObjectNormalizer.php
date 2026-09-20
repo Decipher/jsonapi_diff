@@ -13,10 +13,11 @@ use Symfony\Component\Serializer\SerializerAwareTrait;
 /**
  * Encodes the map attributes of a diff resource object as JSON objects.
  *
- * `summary` and `fields` are maps. PHP has one array type, so an empty map
- * encodes as `[]` and a client that expects an object breaks. A real case is
- * a paragraph whose only field is a reference to other paragraphs: every
- * field recurses into `children` and nothing is left to report.
+ * `summary`, `tree_summary` and `fields` are maps. PHP has one array type, so
+ * an empty map encodes as `[]` and a client that expects an object breaks. A
+ * real case is a paragraph whose only field is a reference to other
+ * paragraphs: every field recurses into `children` and nothing is left to
+ * report.
  *
  * The cast cannot be done where the resource object is built. Core hands any
  * attribute that is not a field item list straight to
@@ -37,7 +38,7 @@ class DiffResourceObjectNormalizer implements NormalizerInterface, SerializerAwa
   /**
    * The attributes of a diff resource object that are maps.
    */
-  private const array MAP_ATTRIBUTES = ['summary', 'fields'];
+  private const array MAP_ATTRIBUTES = ['summary', 'tree_summary', 'fields'];
 
   /**
    * Constructs the normalizer.

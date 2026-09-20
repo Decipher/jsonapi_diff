@@ -305,6 +305,126 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * The tree summary reports a change the entity's own summary misses.
+   *
+   * Nothing on the node changed. One paragraph's text did. The node's own
+   * summary is therefore all `same`, which is the case a client reading it
+   * to ask "did this page change" gets wrong.
+   */
+  public function testTreeSummaryReportsWhatTheSummaryMisses(): void {
+    $block = $this->createParagraph('block', ['field_body' => 'body']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($block)]);
+    $this->reviseParagraph($block, ['field_body' => 'body, edited']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($block)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $child = $this->childFor($diff, $block);
+    $this->assertSame(FieldDiff::CHANGED, $child->diff->fields['field_body']->status);
+    $this->assertSame(0, $diff->summary['changed']);
+    $this->assertSame(count($diff->fields), $diff->summary['same']);
+    $this->assertSame(1, $diff->treeSummary['changed']);
+    $this->assertSame($diff->summary['same'] + $child->diff->summary['same'], $diff->treeSummary['same']);
+    $this->assertSame(array_sum($diff->summary) + array_sum($child->diff->summary), array_sum($diff->treeSummary));
+  }
+
+  /**
+   * A change on the node and one in a block are both in the tree summary.
+   */
+  public function testTreeSummaryCountsTheEntityAndItsChildren(): void {
+    $block = $this->createParagraph('block', ['field_body' => 'body']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($block)]);
+    $this->reviseParagraph($block, ['field_body' => 'body, edited']);
+    [$left, $right] = $this->revise($node, ['field_text' => 'text, edited', 'field_blocks' => $this->references($block)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertSame(1, $diff->summary['changed']);
+    $this->assertSame(2, $diff->treeSummary['changed']);
+  }
+
+  /**
+   * The sum reaches a paragraph inside a paragraph.
+   */
+  public function testTreeSummaryIsRecursive(): void {
+    $inner = $this->createParagraph('block', ['field_body' => 'inner']);
+    $group = $this->createParagraph('group', ['field_items' => $this->references($inner)]);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($group)]);
+    $this->reviseParagraph($inner, ['field_body' => 'inner changed']);
+    $this->reviseParagraph($group, ['field_items' => $this->references($inner)]);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($group)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $group_diff = $this->childFor($diff, $group)->diff;
+    $inner_diff = $this->childFor($group_diff, $inner)->diff;
+    $this->assertSame(1, $inner_diff->summary['changed']);
+    $this->assertSame(0, $group_diff->summary['changed']);
+    $this->assertSame(1, $group_diff->treeSummary['changed']);
+    $this->assertSame(0, $diff->summary['changed']);
+    $this->assertSame(1, $diff->treeSummary['changed']);
+  }
+
+  /**
+   * An entity with no children has the same two summaries.
+   */
+  public function testTreeSummaryOfLeafIsItsSummary(): void {
+    $block = $this->createParagraph('block', ['field_body' => 'body']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($block)]);
+    $this->reviseParagraph($block, ['field_body' => 'body, edited']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($block)]);
+
+    $leaf = $this->childFor($this->builder->build($left, $right), $block)->diff;
+
+    $this->assertSame([], $leaf->children);
+    $this->assertSame($leaf->summary, $leaf->treeSummary);
+  }
+
+  /**
+   * An added and a removed block count their fields in the rollup.
+   */
+  public function testTreeSummaryCountsAddedAndRemovedChildren(): void {
+    $kept = $this->createParagraph('block', ['field_body' => 'kept']);
+    $removed = $this->createParagraph('block', ['field_body' => 'old']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($kept, $removed)]);
+    $this->reviseParagraph($kept);
+    $added = $this->createParagraph('block', ['field_body' => 'new']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($kept, $added)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $added_diff = $this->childFor($diff, $added)->diff;
+    $removed_diff = $this->childFor($diff, $removed)->diff;
+    $this->assertSame(0, $diff->summary['added']);
+    $this->assertSame(0, $diff->summary['removed']);
+    $this->assertSame(count($added_diff->fields), $diff->treeSummary['added']);
+    $this->assertSame(count($removed_diff->fields), $diff->treeSummary['removed']);
+    $this->assertSame(
+      $diff->summary['same'] + $this->childFor($diff, $kept)->diff->summary['same'],
+      $diff->treeSummary['same'],
+    );
+  }
+
+  /**
+   * A child the user may not view is counted nowhere in the rollup.
+   */
+  public function testDeniedChildIsNotCountedInTheTreeSummary(): void {
+    $shown = $this->createParagraph('block', ['field_body' => 'shown body']);
+    $denied = $this->createParagraph('block', ['field_body' => 'denied body', 'status' => 0]);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($shown, $denied)]);
+    $this->reviseParagraph($shown);
+    $this->reviseParagraph($denied, ['field_body' => 'denied body, edited']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($shown, $denied)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $shown_diff = $this->childFor($diff, $shown)->diff;
+    $this->assertCount(1, $diff->children);
+    $this->assertSame(0, $diff->treeSummary['changed']);
+    $this->assertSame(array_sum($diff->summary) + array_sum($shown_diff->summary), array_sum($diff->treeSummary));
+  }
+
+  /**
    * A revision compared with itself has the same everything.
    */
   public function testSameRevision(): void {

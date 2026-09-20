@@ -121,6 +121,9 @@ class DiffResourceTest extends BrowserTestBase {
     $this->assertSame($node->uuid() . ':1:2', $document['data']['id']);
     $this->assertSame('changed', $document['data']['attributes']['fields']['field_text']['status']);
     $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 1, 'same' => 3], $document['data']['attributes']['summary']);
+    // One block was edited and one added, so the page changed by more than
+    // its own fields report.
+    $this->assertSame(['added' => 1, 'removed' => 0, 'changed' => 2, 'same' => 5], $document['data']['attributes']['tree_summary']);
     $this->assertCount(4, $document['included']);
 
     $statuses = [];
@@ -141,7 +144,7 @@ class DiffResourceTest extends BrowserTestBase {
     $this->drupalLogin($this->editor);
 
     $whole = $this->fetch($this->path($node));
-    $this->assertSame(['summary', 'fields'], array_keys($whole['data']['attributes']));
+    $this->assertSame(['summary', 'tree_summary', 'fields'], array_keys($whole['data']['attributes']));
     $this->assertSame(['left', 'right', 'children'], array_keys($whole['data']['relationships']));
 
     $document = $this->fetch($this->path($node), $this->fieldset('summary'));
@@ -159,6 +162,30 @@ class DiffResourceTest extends BrowserTestBase {
       $this->assertSame(['summary'], array_keys($child['attributes']), $child['id']);
       $this->assertArrayNotHasKey('relationships', $child);
     }
+  }
+
+  /**
+   * A fieldset naming the rollup returns it, and one without it drops it.
+   *
+   * The rollup is a member of the resource type, so the fieldset reaches it
+   * with no code of its own.
+   */
+  public function testSparseFieldsetNamesTheTreeSummary(): void {
+    [$node] = $this->createReshapedArticle(['uid' => $this->editor->id()]);
+    $this->drupalLogin($this->editor);
+
+    $rollup = $this->fetch($this->path($node), $this->fieldset('tree_summary'));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertSame(['tree_summary'], array_keys($rollup['data']['attributes']));
+    $this->assertSame(['added' => 1, 'removed' => 0, 'changed' => 2, 'same' => 5], $rollup['data']['attributes']['tree_summary']);
+    foreach ($rollup['included'] as $child) {
+      $this->assertSame(['tree_summary'], array_keys($child['attributes']), $child['id']);
+    }
+
+    $own = $this->fetch($this->path($node), $this->fieldset('summary'));
+
+    $this->assertSame(['summary'], array_keys($own['data']['attributes']));
   }
 
   /**
@@ -239,6 +266,10 @@ class DiffResourceTest extends BrowserTestBase {
     $this->assertCount(1, $diffs);
     $this->assertInstanceOf(\stdClass::class, $diffs[0]->attributes->fields);
     $this->assertSame([], get_object_vars($diffs[0]->attributes->fields));
+    // The group has nothing of its own, so the rollup is the block's alone.
+    $this->assertInstanceOf(\stdClass::class, $diffs[0]->attributes->tree_summary);
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 0], (array) $diffs[0]->attributes->summary);
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 1], (array) $diffs[0]->attributes->tree_summary);
   }
 
   /**
@@ -267,6 +298,38 @@ class DiffResourceTest extends BrowserTestBase {
     $this->assertCount(1, $document['included']);
     $this->assertStringStartsWith($shown->uuid() . ':', $document['included'][0]['id']);
     $this->assertSame('shown block', $document['included'][0]['attributes']['fields']['field_body']['left']);
+  }
+
+  /**
+   * A block the reader may not view is counted nowhere in the rollup.
+   *
+   * The dropped block is the only thing that changed, so a rollup that
+   * counted it would report a change the reader cannot be shown. The counts
+   * are read from the encoded body, because that is what a client parses.
+   */
+  public function testDeniedChildIsNotCountedInTheTreeSummary(): void {
+    $shown = $this->createBlock('shown block');
+    $denied = $this->createUnpublishedBlock('denied block');
+    $node = $this->createArticle([
+      'field_text' => 'published text',
+      'field_blocks' => $this->references($shown, $denied),
+      'uid' => $this->editor->id(),
+    ]);
+    $this->reviseBlock($shown);
+    $this->reviseBlock($denied, 'denied block, edited');
+    $node = $this->draft($node, ['field_blocks' => $this->references($shown, $denied)]);
+    $this->drupalLogin($this->editor);
+
+    $body = $this->drupalGet($this->path($node), [], self::HEADERS);
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertStringNotContainsString('denied block', $body);
+    $this->assertStringContainsString('"summary":{"added":0,"removed":0,"changed":0,"same":4},"tree_summary":{"added":0,"removed":0,"changed":0,"same":5}', $body);
+
+    $document = json_decode($body, TRUE);
+    $this->assertCount(1, $document['included']);
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 5], $document['data']['attributes']['tree_summary']);
+    $this->assertSame($document['included'][0]['attributes']['summary'], $document['included'][0]['attributes']['tree_summary']);
   }
 
   /**
