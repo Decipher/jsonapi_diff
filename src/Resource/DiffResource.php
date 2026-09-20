@@ -101,7 +101,9 @@ final class DiffResource extends ResourceBase implements ContainerInjectionInter
     }
 
     $pair = $this->revisionPairResolver->resolve($entity, $this->version($request, DiffResourceObject::LEFT_PARAMETER), $this->version($request, DiffResourceObject::RIGHT_PARAMETER));
-    $tree = $this->treeBuilder->build($pair->left, $pair->right);
+    // The tree is judged for the account the pair was judged for, so one
+    // account decides the whole document.
+    $tree = $this->treeBuilder->build($pair->left, $pair->right, $pair->account);
 
     $language = $this->languageManager->getCurrentLanguage(LanguageInterface::TYPE_CONTENT);
     $root = new DiffResourceObject($diff_type, $resource_type, $tree, $pair->leftVersion, $pair->rightVersion, $language);

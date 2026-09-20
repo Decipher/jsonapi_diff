@@ -11,6 +11,7 @@ use Drupal\Component\Diff\Engine\DiffOpCopy;
 use Drupal\Component\Diff\Engine\DiffOpDelete;
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Entity\ContentEntityInterface;
+use Drupal\Core\Session\AccountInterface;
 use Drupal\diff\DiffBuilderManager;
 use Drupal\diff\DiffEntityComparison;
 use Drupal\diff\FieldReferenceInterface;
@@ -48,13 +49,17 @@ final readonly class TreeBuilder {
    *   The left revision.
    * @param \Drupal\Core\Entity\ContentEntityInterface $right
    *   The right revision.
+   * @param \Drupal\Core\Session\AccountInterface|null $account
+   *   The account the two revisions were judged for, or NULL for the
+   *   current user. Every entity and field below them is judged for the
+   *   same account, so one account decides the whole document.
    *
    * @return \Drupal\jsonapi_diff\Comparison\EntityDiff
    *   The root diff. Its cacheability covers the whole tree.
    */
-  public function build(ContentEntityInterface $left, ContentEntityInterface $right): EntityDiff {
+  public function build(ContentEntityInterface $left, ContentEntityInterface $right, ?AccountInterface $account = NULL): EntityDiff {
     $flat = $this->diffEntityComparison->compareRevisions($left, $right);
-    return $this->buildEntity($left, $right, $flat, new CacheableMetadata(), TRUE);
+    return $this->buildEntity($left, $right, $flat, new CacheableMetadata(), TRUE, $account);
   }
 
   /**
@@ -70,8 +75,10 @@ final readonly class TreeBuilder {
    *   The root's cacheability, which collects the whole tree.
    * @param bool $is_root
    *   TRUE for the root entity, whose cacheability is the collector itself.
+   * @param \Drupal\Core\Session\AccountInterface|null $account
+   *   The account every access decision is taken for.
    */
-  private function buildEntity(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, CacheableMetadata $collector, bool $is_root): EntityDiff {
+  private function buildEntity(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, CacheableMetadata $collector, bool $is_root, ?AccountInterface $account): EntityDiff {
     $entity = $left ?? $right;
     assert($entity instanceof ContentEntityInterface);
     $resource_type = $this->resourceTypeRepository->get($entity->getEntityTypeId(), $entity->bundle());
@@ -94,7 +101,7 @@ final readonly class TreeBuilder {
       if (!$resource_type->isFieldEnabled($name)) {
         continue;
       }
-      if (!$this->fieldIsViewable($left, $right, $name, $collector)) {
+      if (!$this->fieldIsViewable($left, $right, $name, $collector, $account)) {
         continue;
       }
       $definition = $entity->getFieldDefinition($name);
@@ -116,7 +123,7 @@ final readonly class TreeBuilder {
       FieldDiff::SAME => $counts[FieldDiff::SAME] ?? 0,
     ];
 
-    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector);
+    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector, $account);
 
     return new EntityDiff(
       $entity->getEntityTypeId(),
@@ -139,13 +146,13 @@ final readonly class TreeBuilder {
    * collected. A field denied on one side is dropped from both, so a
    * denial is never worked around by reading the other side.
    */
-  private function fieldIsViewable(?ContentEntityInterface $left, ?ContentEntityInterface $right, string $name, CacheableMetadata $collector): bool {
+  private function fieldIsViewable(?ContentEntityInterface $left, ?ContentEntityInterface $right, string $name, CacheableMetadata $collector, ?AccountInterface $account): bool {
     $viewable = FALSE;
     foreach ([$left, $right] as $side) {
       if (!$side instanceof ContentEntityInterface || !$side->hasField($name)) {
         continue;
       }
-      $access = $side->get($name)->access('view', NULL, TRUE);
+      $access = $side->get($name)->access('view', $account, TRUE);
       $collector->addCacheableDependency($access);
       if (!$access->isAllowed()) {
         return FALSE;
@@ -237,7 +244,7 @@ final readonly class TreeBuilder {
    * @return list<\Drupal\jsonapi_diff\Comparison\ChildDiff>
    *   The children.
    */
-  private function buildChildren(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, ResourceType $resource_type, CacheableMetadata $collector): array {
+  private function buildChildren(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, ResourceType $resource_type, CacheableMetadata $collector, ?AccountInterface $account): array {
     $entity = $left ?? $right;
     assert($entity instanceof ContentEntityInterface);
     $children = [];
@@ -253,8 +260,8 @@ final readonly class TreeBuilder {
         continue;
       }
       $denied = [];
-      $left_children = $this->childrenOfSide($plugin, $left, $name, $collector, $denied);
-      $right_children = $this->childrenOfSide($plugin, $right, $name, $collector, $denied);
+      $left_children = $this->childrenOfSide($plugin, $left, $name, $collector, $denied, $account);
+      $right_children = $this->childrenOfSide($plugin, $right, $name, $collector, $denied, $account);
       if ($left_children === NULL || $right_children === NULL) {
         continue;
       }
@@ -266,14 +273,14 @@ final readonly class TreeBuilder {
         if (isset($right_children[$id])) {
           [$right_delta, $right_child] = $right_children[$id];
           $status = $left_delta === $right_delta ? ChildDiff::SAME : ChildDiff::MOVED;
-          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, $this->buildEntity($left_child, $right_child, $flat, $collector, FALSE));
+          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, $this->buildEntity($left_child, $right_child, $flat, $collector, FALSE, $account));
         }
         else {
-          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, $this->buildEntity($left_child, NULL, $flat, $collector, FALSE));
+          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, $this->buildEntity($left_child, NULL, $flat, $collector, FALSE, $account));
         }
       }
       foreach (array_diff_key($right_children, $left_children) as [$right_delta, $right_child]) {
-        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, $this->buildEntity(NULL, $right_child, $flat, $collector, FALSE));
+        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, $this->buildEntity(NULL, $right_child, $flat, $collector, FALSE, $account));
       }
     }
     return $children;
@@ -297,17 +304,19 @@ final readonly class TreeBuilder {
    *   Collects the cacheability of every access decision taken here.
    * @param array<int|string, true> $denied
    *   Ids of the children no side may serve. Added to by this method.
+   * @param \Drupal\Core\Session\AccountInterface|null $account
+   *   The account every access decision is taken for.
    *
    * @return array<int|string, array{int, \Drupal\Core\Entity\ContentEntityInterface}>|null
    *   Delta and entity, keyed by entity id, in delta order. NULL when the
    *   field itself may not be viewed, which drops it from both sides.
    */
-  private function childrenOfSide(FieldReferenceInterface $plugin, ?ContentEntityInterface $side, string $name, CacheableMetadata $collector, array &$denied): ?array {
+  private function childrenOfSide(FieldReferenceInterface $plugin, ?ContentEntityInterface $side, string $name, CacheableMetadata $collector, array &$denied, ?AccountInterface $account): ?array {
     if (!$side instanceof ContentEntityInterface || !$side->hasField($name)) {
       return [];
     }
     $items = $side->get($name);
-    $access = $items->access('view', NULL, TRUE);
+    $access = $items->access('view', $account, TRUE);
     $collector->addCacheableDependency($access);
     if (!$access->isAllowed()) {
       return NULL;
@@ -317,7 +326,7 @@ final readonly class TreeBuilder {
       if (!$child instanceof ContentEntityInterface) {
         continue;
       }
-      if (!$this->isServable($child, $collector)) {
+      if (!$this->isServable($child, $collector, $account)) {
         $denied[$child->id()] = TRUE;
         continue;
       }
@@ -333,12 +342,12 @@ final readonly class TreeBuilder {
    * its own route. The rest is the access rule the compared revisions are
    * judged by.
    */
-  private function isServable(ContentEntityInterface $child, CacheableMetadata $collector): bool {
+  private function isServable(ContentEntityInterface $child, CacheableMetadata $collector, ?AccountInterface $account): bool {
     $resource_type = $this->resourceTypeRepository->get($child->getEntityTypeId(), $child->bundle());
     if (!$resource_type instanceof ResourceType || $resource_type->isInternal()) {
       return FALSE;
     }
-    return $this->entityViewCheck->isViewable($child, NULL, $collector);
+    return $this->entityViewCheck->isViewable($child, $account, $collector);
   }
 
 }
