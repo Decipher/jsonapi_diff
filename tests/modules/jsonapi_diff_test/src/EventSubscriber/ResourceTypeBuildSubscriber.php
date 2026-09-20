@@ -9,10 +9,11 @@ use Drupal\jsonapi\ResourceType\ResourceTypeBuildEvents;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 /**
- * Aliases one field and disables another on every resource type.
+ * Aliases one field, disables another, and disables one resource type.
  *
  * This is the core mechanism a site uses to rename or hide a field in
- * JSON:API. The diff has to follow it.
+ * JSON:API, and to take a bundle off the API altogether. The diff has to
+ * follow it.
  */
 final class ResourceTypeBuildSubscriber implements EventSubscriberInterface {
 
@@ -32,6 +33,11 @@ final class ResourceTypeBuildSubscriber implements EventSubscriberInterface {
   public const string DISABLED_FIELD = 'field_hidden';
 
   /**
+   * The resource type name the site has taken off JSON:API.
+   */
+  public const string DISABLED_TYPE = 'paragraph--internal';
+
+  /**
    * {@inheritdoc}
    */
   public static function getSubscribedEvents(): array {
@@ -41,9 +47,13 @@ final class ResourceTypeBuildSubscriber implements EventSubscriberInterface {
   }
 
   /**
-   * Applies the alias and the disabling.
+   * Applies the alias and the two kinds of disabling.
    */
   public function onResourceTypeBuild(ResourceTypeBuildEvent $event): void {
+    if ($event->getResourceTypeName() === self::DISABLED_TYPE) {
+      $event->disableResourceType();
+      return;
+    }
     foreach ($event->getFields() as $field) {
       if ($field->getInternalName() === self::ALIASED_FIELD) {
         $event->setPublicFieldName($field, self::PUBLIC_NAME);

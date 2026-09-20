@@ -329,9 +329,15 @@ final readonly class TreeBuilder {
   /**
    * Decides whether one child entity may appear in the document.
    *
-   * The rule is the one the compared revisions are judged by.
+   * A resource type the site does not expose is skipped, as the root is on
+   * its own route. The rest is the access rule the compared revisions are
+   * judged by.
    */
   private function isServable(ContentEntityInterface $child, CacheableMetadata $collector): bool {
+    $resource_type = $this->resourceTypeRepository->get($child->getEntityTypeId(), $child->bundle());
+    if (!$resource_type instanceof ResourceType || $resource_type->isInternal()) {
+      return FALSE;
+    }
     return $this->entityViewCheck->isViewable($child, NULL, $collector);
   }
 
