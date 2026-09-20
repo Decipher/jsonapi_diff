@@ -110,7 +110,7 @@ class DiffDocumentTest extends KernelTestBase {
 
     $this->assertSame('jsonapi_diff--diff', $data['type']);
     $this->assertSame($this->uuid . ':1:2', $data['id']);
-    $this->assertSame(['summary', 'fields'], array_keys($data['attributes']));
+    $this->assertSame(['summary', 'tree_summary', 'fields'], array_keys($data['attributes']));
     $this->assertSame(['left', 'right', 'children'], array_keys($data['relationships']));
     $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 1, 'same' => 0], $data['attributes']['summary']);
     $this->assertSame([
@@ -123,6 +123,26 @@ class DiffDocumentTest extends KernelTestBase {
         ['type' => '+', 'lines' => ['two']],
       ],
     ], $data['attributes']['fields']['title']);
+  }
+
+  /**
+   * The tree summary carries the children's counts, the summary does not.
+   */
+  public function testTreeSummaryRollsUpTheChildren(): void {
+    $child = $this->entityDiff('c1', 5, 6, ['field_body' => new FieldDiff('Body', FieldDiff::CHANGED, 'one', 'two', [])]);
+    $diff = $this->entityDiff($this->uuid, 1, 2, ['title' => new FieldDiff('Title', FieldDiff::SAME, 'one', 'one', [])], [
+      new ChildDiff('field_blocks', 0, 0, ChildDiff::SAME, $child),
+    ]);
+    $root = new DiffResourceObject($this->diffType, $this->articleType, $diff, 'id:1', 'id:2');
+
+    $data = $this->normalize($root, [new DiffResourceObject($this->diffType, $this->articleType, $child, 'id:5', 'id:6')]);
+
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 1], $data['data']['attributes']['summary']);
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 1, 'same' => 1], $data['data']['attributes']['tree_summary']);
+    // A leaf reports the same counts twice.
+    $included = $data['included'][0]['attributes'];
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 1, 'same' => 0], $included['summary']);
+    $this->assertSame($included['summary'], $included['tree_summary']);
   }
 
   /**
@@ -216,6 +236,7 @@ class DiffDocumentTest extends KernelTestBase {
     $decoded = json_decode($json, FALSE);
     $this->assertInstanceOf(\stdClass::class, $decoded->data->attributes->fields);
     $this->assertInstanceOf(\stdClass::class, $decoded->data->attributes->summary);
+    $this->assertInstanceOf(\stdClass::class, $decoded->data->attributes->tree_summary);
   }
 
   /**

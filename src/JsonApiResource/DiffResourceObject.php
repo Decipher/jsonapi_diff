@@ -21,7 +21,10 @@ use Drupal\jsonapi_diff\Comparison\FieldDiff;
 /**
  * The JSON:API resource object of one entity's diff.
  *
- * The shape is fixed here. `summary` and `fields` are attributes. `left` and
+ * The shape is fixed here. `summary`, `tree_summary` and `fields` are
+ * attributes. `summary` counts this entity's own fields and `tree_summary`
+ * counts the whole subtree below it, which is the count a page made of
+ * paragraphs needs. `left` and
  * `right` point at the compared entity, with the version in the identifier's
  * meta and the individual URL of that version as the `related` link.
  * `children` lists the diffs of the entities the comparison recursed into,
@@ -97,6 +100,7 @@ final class DiffResourceObject extends ResourceObject {
     // reference, and nothing reads it before normalization.
     $fields = [
       'summary' => $diff->summary,
+      'tree_summary' => $diff->treeSummary,
       'fields' => array_map(static fn (FieldDiff $field): array => [
         'label' => $field->label,
         'status' => $field->status,
@@ -155,6 +159,7 @@ final class DiffResourceObject extends ResourceObject {
   public static function resourceType(array $versionable_types): ResourceType {
     $fields = [
       'summary' => new ResourceTypeAttribute('summary'),
+      'tree_summary' => new ResourceTypeAttribute('tree_summary'),
       'fields' => new ResourceTypeAttribute('fields'),
       'left' => new ResourceTypeRelationship('left'),
       'right' => new ResourceTypeRelationship('right'),
