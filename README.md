@@ -156,6 +156,7 @@ depth, so one request returns the whole tree.
 | `type` | Always `jsonapi_diff--diff` |
 | `id` | `{entity uuid}:{left revision id}:{right revision id}` |
 | `attributes.summary` | The entity's own fields counted by status |
+| `attributes.tree_summary` | The same counts for this entity and everything below it |
 | `attributes.fields` | One entry per compared field, keyed by JSON:API public name |
 | `relationships.left` | The compared entity at the left version |
 | `relationships.right` | The compared entity at the right version |
@@ -182,6 +183,7 @@ and one of the four `included` resources:
     },
     "attributes": {
       "summary": { "added": 0, "removed": 0, "changed": 1, "same": 3 },
+      "tree_summary": { "added": 1, "removed": 0, "changed": 2, "same": 5 },
       "fields": {
         "uid": {
           "label": "Authored by",
@@ -270,6 +272,7 @@ and one of the four `included` resources:
       },
       "attributes": {
         "summary": { "added": 0, "removed": 0, "changed": 1, "same": 0 },
+        "tree_summary": { "added": 0, "removed": 0, "changed": 1, "same": 0 },
         "fields": {
           "field_body": {
             "label": "Body",
@@ -379,10 +382,38 @@ carried lines, `-` for removed and `+` for added, and `lines` holds them in
 order with no markup. A changed line arrives as a `-` followed by a `+`, which
 is the pair a client needs to run its own word diff over the change.
 
+### Summary and tree summary
+
+The same four counts appear twice on a diff, under two names that answer
+different questions.
+
+| Attribute | Answers |
+| --- | --- |
+| `summary` | Did this entity's own fields change |
+| `tree_summary` | Did this entity or anything below it change |
+
 `attributes.summary` counts the entity's own fields by status. It counts only
 what is present, so a field dropped by JSON:API or by field access is not in the
 totals, and the four counts always add up to the number of entries in `fields`.
 Children are not counted, because each child has a summary of its own.
+
+`attributes.tree_summary` adds every descendant's counts to those, to any depth.
+On the root it answers "did this page change", which is the question a
+comparison UI asks, and on a page whose text lives in paragraphs the two
+summaries differ: a draft that only edited a block leaves `summary` all `same`
+and reports the edit in `tree_summary`. On a child it answers "did this block
+change", counting the block and anything nested inside it.
+
+`tree_summary` counts what is in the document and nothing else. A child the user
+may not view is absent from the document, and so is a child of a resource type
+JSON:API does not expose. No rollup above them counts their fields. On an entity
+with no children the two attributes are equal.
+
+Reach for `tree_summary` on a child rather than `children[].meta.status`. The
+`meta` status is about the reference: whether that block was added, removed,
+moved or left where it was. A block whose text was rewritten in place keeps its
+id and its position, so its `meta.status` is `same` while its own
+`tree_summary` reports the change.
 
 ### Asking for less
 
@@ -391,14 +422,15 @@ counts and nothing else asks for them:
 
 ```bash
 curl -H 'Accept: application/vnd.api+json' \
-  'https://example.com/jsonapi/diff/node/article/85924444-4579-493c-8658-e654df08ff08?fields%5Bjsonapi_diff--diff%5D=summary'
+  'https://example.com/jsonapi/diff/node/article/85924444-4579-493c-8658-e654df08ff08?fields%5Bjsonapi_diff--diff%5D=tree_summary'
 ```
 
 The fieldset names members of the diff resource, in any combination:
 
 | Member | Holds |
 | --- | --- |
-| `summary` | The counts |
+| `summary` | The counts for the entity's own fields |
+| `tree_summary` | The counts for the entity and everything below it |
 | `fields` | Every compared field, with both sides and the line operations |
 | `left`, `right` | The compared entity at each version |
 | `children` | The identifiers of the nested diffs |
@@ -457,10 +489,11 @@ function walk(diff, depth = 0) {
 walk(doc.data)
 ```
 
-`attributes.summary` answers "did anything change here" without the walk, but it
-counts one entity's own fields and not its children, so a root whose summary is
-all `same` can still hold a changed paragraph. Walk the tree, or sum the
-summaries of everything in `included` as well.
+A client that only needs to know whether anything changed does not need the walk
+at all. `attributes.tree_summary` on the primary data already holds the counts
+for the whole tree, so a root whose `tree_summary` is all `same` has no change
+anywhere in it, paragraphs included. Walk the tree when you want to show what
+changed and where. Read `tree_summary` when you want the answer.
 
 ## Access
 
@@ -475,7 +508,10 @@ revision reaches the client. A label-only view counts as a denial too,
 since a diff of one would disclose the fields the label hides.
 
 Per-field view access applies inside the tree. A field the user may not view is
-absent from that entity's `fields` and is not counted in its `summary`.
+absent from that entity's `fields` and is not counted in its `summary`. An
+entity the user may not view is dropped from the document. No `tree_summary`
+above it counts its fields, so the rollup never reports a change the reader
+cannot be shown.
 
 An entity that does not exist is a `404` whatever the user's access, so the
 route cannot be used to learn that an entity exists.
@@ -717,9 +753,17 @@ open for additional keys.
 **A:** Because the client this was built for needs the text anyway to render the
 page, so sending it once with the diff saves a second request. It does make a
 large tree a large payload. A client that does not need the text asks for
-`fields[jsonapi_diff--diff]=summary,children` and walks the tree on the counts,
-then fetches the one diff it wants to show in full. A fieldset cannot keep
-`fields` and drop the entries whose status is `same`.
+`fields[jsonapi_diff--diff]=tree_summary,children` and walks the tree on the
+counts, then fetches the one diff it wants to show in full. A fieldset cannot
+keep `fields` and drop the entries whose status is `same`.
+
+**Q: How do I tell whether a page changed at all?**
+
+**A:** Read `attributes.tree_summary` on the primary data. It counts the node's
+own fields and every paragraph below it, so one set of counts answers the
+question. The `attributes.summary` beside it counts the node's own fields alone,
+which on a page built from paragraphs is usually not what a comparison UI is
+asking.
 
 **Q: Can I diff a paragraph on its own?**
 
