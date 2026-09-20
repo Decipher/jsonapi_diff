@@ -115,28 +115,22 @@ class DiffDocumentTest extends KernelTestBase {
     $this->assertSame(['summary', 'tree_summary', 'fields'], array_keys($data['attributes']));
     $this->assertSame(['left', 'right', 'children'], array_keys($data['relationships']));
     $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 1, 'same' => 0], $data['attributes']['summary']);
-    $this->assertSame([
+    $expected_item = [
+      'delta' => 0,
+      'status' => 'changed',
+      'left' => 'one',
+      'right' => 'two',
+      'ops' => $ops,
+    ];
+    $expected = [
       'label' => 'Title',
       'status' => 'changed',
       'left' => 'one',
       'right' => 'two',
-      'ops' => [
-        ['type' => '-', 'lines' => ['one']],
-        ['type' => '+', 'lines' => ['two']],
-      ],
-      'items' => [
-        [
-          'delta' => 0,
-          'status' => 'changed',
-          'left' => 'one',
-          'right' => 'two',
-          'ops' => [
-            ['type' => '-', 'lines' => ['one']],
-            ['type' => '+', 'lines' => ['two']],
-          ],
-        ],
-      ],
-    ], $data['attributes']['fields']['title']);
+      'ops' => $ops,
+      'items' => [$expected_item],
+    ];
+    $this->assertSame($expected, $data['attributes']['fields']['title']);
   }
 
   /**
