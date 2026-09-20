@@ -82,6 +82,7 @@ class TreeBuilderTest extends KernelTestBase {
     NodeType::create(['type' => 'article', 'name' => 'Article'])->save();
     ParagraphsType::create(['id' => 'block', 'label' => 'Block'])->save();
     ParagraphsType::create(['id' => 'group', 'label' => 'Group'])->save();
+    ParagraphsType::create(['id' => 'internal', 'label' => 'Internal'])->save();
 
     $this->createTextField('node', 'article', 'field_text', 'Text');
     $this->createTextField('node', 'article', 'field_lines', 'Lines', -1);
@@ -91,6 +92,7 @@ class TreeBuilderTest extends KernelTestBase {
     $this->createParagraphField('node', 'article', 'field_blocks', 'Blocks');
     $this->createTextField('paragraph', 'block', 'field_body', 'Body');
     $this->createParagraphField('paragraph', 'group', 'field_items', 'Items');
+    $this->createTextField('paragraph', 'internal', 'field_note', 'Note');
 
     $this->builder = $this->container->get('jsonapi_diff.tree_builder');
   }
@@ -454,6 +456,26 @@ class TreeBuilderTest extends KernelTestBase {
 
     $this->assertSame([], $diff->children);
     $this->assertStringNotContainsString('published body', $this->values($diff));
+  }
+
+  /**
+   * A child whose resource type JSON:API disables is absent.
+   */
+  public function testInternalResourceTypeChildIsAbsent(): void {
+    $shown = $this->createParagraph('block', ['field_body' => 'shown body']);
+    $internal = $this->createParagraph('internal', ['field_note' => 'internal note']);
+    $node = $this->createNode(['field_blocks' => $this->references($shown, $internal)]);
+    $this->reviseParagraph($shown);
+    $this->reviseParagraph($internal, ['field_note' => 'internal note, edited']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($shown, $internal)]);
+    $resource_type = $this->container->get('jsonapi.resource_type.repository')->get('paragraph', 'internal');
+    $this->assertTrue($resource_type->isInternal());
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(1, $diff->children);
+    $this->assertNotContains($internal->uuid(), $this->uuids($diff));
+    $this->assertStringNotContainsString('internal note', $this->values($diff));
   }
 
   /**

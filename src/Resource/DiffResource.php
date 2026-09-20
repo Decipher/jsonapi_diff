@@ -158,7 +158,12 @@ final class DiffResource extends ResourceBase implements ContainerInjectionInter
   private function collectIncluded(ResourceType $diff_type, EntityDiff $diff, LanguageInterface $language, array &$included): void {
     foreach ($diff->children as $child) {
       $entity_type = $this->resourceTypeRepository->get($child->diff->entityTypeId, $child->diff->bundle);
-      assert($entity_type instanceof ResourceType, 'The tree only holds entities JSON:API exposes.');
+      // The tree holds only entities JSON:API exposes, so this is a guard
+      // against a later change, not a case a client can reach. An assert
+      // would not run in production, where the value is a type error.
+      if (!$entity_type instanceof ResourceType || $entity_type->isInternal()) {
+        continue;
+      }
       $included[] = new DiffResourceObject(
         $diff_type,
         $entity_type,
