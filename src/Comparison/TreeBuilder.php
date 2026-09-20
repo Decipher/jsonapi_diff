@@ -44,6 +44,16 @@ final readonly class TreeBuilder {
    */
   private const array CONFIG_CACHE_TAGS = ['config:diff.plugins', 'config:diff.settings'];
 
+  /**
+   * The lowest word similarity that still pairs two children by position.
+   *
+   * A Dice coefficient of 0.5 is the point where two texts share as many
+   * words as they do not. Below it, calling the pair one block that
+   * changed claims more than the content supports, so the two are left as
+   * an honest removal and addition.
+   */
+  private const float SIMILARITY_THRESHOLD = 0.5;
+
   public function __construct(
     private DiffEntityParser $diffEntityParser,
     private DiffBuilderManager $diffBuilderManager,
@@ -71,30 +81,43 @@ final readonly class TreeBuilder {
   }
 
   /**
-   * Reads both sides and pairs their fields by key and by delta.
+   * Reads both sides and keeps each side's fields under its own keys.
    *
    * The keys are the parser's, `{entity id}:{entity type}.{field name}`,
-   * for every entity in the tree. A field only one side holds keeps its
-   * key and gets no values on the other side. The order is the left side's
-   * fields, then the fields only the right side has, which is the order
-   * Diff's own comparison produces.
+   * for every entity in the tree. The two sides are kept apart rather than
+   * merged, because a comparison does not always hold the same entity on
+   * both sides. A pair the positional pass made holds two entities, so its
+   * left values sit under one entity's keys and its right values under
+   * another's.
    *
-   * @return array<string, array{label: string, left: array<int, string>, right: array<int, string>}>
-   *   The per-delta values of both sides, keyed by entity and field.
+   * @return array{left: array<string, array{label: string, values: array<int, string>}>, right: array<string, array{label: string, values: array<int, string>}>}
+   *   The per-delta values of each side, keyed by entity and field.
    */
   private function compare(ContentEntityInterface $left, ContentEntityInterface $right): array {
-    $left_values = $this->diffEntityParser->parseEntity($left);
-    $right_values = $this->diffEntityParser->parseEntity($right);
+    return [
+      'left' => $this->sideValues($this->diffEntityParser->parseEntity($left)),
+      'right' => $this->sideValues($this->diffEntityParser->parseEntity($right)),
+    ];
+  }
 
-    $flat = [];
-    foreach ($left_values + $right_values as $key => $build) {
-      $flat[$key] = [
+  /**
+   * Reduces one side's parsed result to a label and values per field.
+   *
+   * @param array<string, array<int|string, mixed>> $parsed
+   *   The parser's result for one revision.
+   *
+   * @return array<string, array{label: string, values: array<int, string>}>
+   *   The label and per-delta values, keyed by entity and field.
+   */
+  private function sideValues(array $parsed): array {
+    $side = [];
+    foreach ($parsed as $key => $build) {
+      $side[$key] = [
         'label' => (string) ($build['label'] ?? ''),
-        'left' => isset($left_values[$key]) ? $this->itemValues($left_values[$key]) : [],
-        'right' => isset($right_values[$key]) ? $this->itemValues($right_values[$key]) : [],
+        'values' => $this->itemValues($build),
       ];
     }
-    return $flat;
+    return $side;
   }
 
   /**
@@ -136,7 +159,7 @@ final readonly class TreeBuilder {
    *   The left revision, or null when the left side lacks the entity.
    * @param \Drupal\Core\Entity\ContentEntityInterface|null $right
    *   The right revision, or null when the right side lacks the entity.
-   * @param array<string, array{label: string, left: array<int, string>, right: array<int, string>}> $flat
+   * @param array{left: array<string, array{label: string, values: array<int, string>}>, right: array<string, array{label: string, values: array<int, string>}>} $flat
    *   The whole flat result of the root comparison.
    * @param \Drupal\Core\Cache\CacheableMetadata $collector
    *   The root's cacheability, which collects the whole tree.
@@ -159,24 +182,26 @@ final readonly class TreeBuilder {
     $collector->addCacheableDependency($cacheability);
 
     $fields = [];
-    $prefix = $entity->id() . ':' . $entity->getEntityTypeId() . '.';
-    foreach ($flat as $key => $entry) {
-      if (!str_starts_with($key, $prefix)) {
-        continue;
-      }
-      $name = substr($key, strlen($prefix));
+    $left_prefix = $left instanceof ContentEntityInterface ? $this->prefixOf($left) : NULL;
+    $right_prefix = $right instanceof ContentEntityInterface ? $this->prefixOf($right) : NULL;
+    $names = $this->namesUnder($flat['left'], $left_prefix) + $this->namesUnder($flat['right'], $right_prefix);
+    foreach (array_keys($names) as $name) {
       if (!$resource_type->isFieldEnabled($name)) {
         continue;
       }
       if (!$this->fieldIsViewable($left, $right, $name, $collector, $account)) {
         continue;
       }
+      $left_entry = $left_prefix === NULL ? NULL : ($flat['left'][$left_prefix . $name] ?? NULL);
+      $right_entry = $right_prefix === NULL ? NULL : ($flat['right'][$right_prefix . $name] ?? NULL);
       $definition = $entity->getFieldDefinition($name);
-      $label = $definition !== NULL ? (string) $definition->getLabel() : $entry['label'];
+      $label = $definition !== NULL
+        ? (string) $definition->getLabel()
+        : ($left_entry['label'] ?? $right_entry['label'] ?? '');
       $field = $this->buildField(
         $label,
-        $entry['left'],
-        $entry['right'],
+        $left_entry['values'] ?? [],
+        $right_entry['values'] ?? [],
         !$left instanceof ContentEntityInterface,
         !$right instanceof ContentEntityInterface,
       );
@@ -202,7 +227,39 @@ final readonly class TreeBuilder {
       $summary,
       $children,
       $is_root ? $collector : $cacheability,
+      $right instanceof ContentEntityInterface && $right->uuid() !== $entity->uuid() ? (string) $right->uuid() : NULL,
     );
+  }
+
+  /**
+   * Builds the key prefix the parser gives one entity's fields.
+   */
+  private function prefixOf(ContentEntityInterface $entity): string {
+    return $entity->id() . ':' . $entity->getEntityTypeId() . '.';
+  }
+
+  /**
+   * Lists the field names one side's values hold under a key prefix.
+   *
+   * @param array<string, array{label: string, values: array<int, string>}> $side
+   *   One side's parsed values, keyed by entity and field.
+   * @param string|null $prefix
+   *   The key prefix of the entity, or NULL when that side lacks it.
+   *
+   * @return array<string, true>
+   *   The field names, in the order the parser produced them.
+   */
+  private function namesUnder(array $side, ?string $prefix): array {
+    if ($prefix === NULL) {
+      return [];
+    }
+    $names = [];
+    foreach (array_keys($side) as $key) {
+      if (str_starts_with($key, $prefix)) {
+        $names[substr($key, strlen($prefix))] = TRUE;
+      }
+    }
+    return $names;
   }
 
   /**
@@ -377,10 +434,29 @@ final readonly class TreeBuilder {
    * must provide entities to diff. That keeps the structure in step with the
    * flat result.
    *
-   * Children are matched across sides by entity id. Left children come
-   * first, in delta order, then children only the right side has. A child
-   * the user may not view on one side is dropped from both, so an entity is
-   * never reported as added or removed because access to it changed.
+   * Children are matched across sides by entity id first. The children no
+   * id matched are then paired by position, which reads a draft that
+   * replaced its blocks with new entities as an edit rather than as a
+   * page replacement. Each child records which pass found it.
+   *
+   * Left children come first, in delta order, then children only the right
+   * side has. A child the user may not view on one side is dropped from
+   * both before either pass runs, so an entity is never reported as added
+   * or removed because access to it changed, and a denied entity is never
+   * paired with anything.
+   *
+   * @param \Drupal\Core\Entity\ContentEntityInterface|null $left
+   *   The left revision of the parent, or NULL when it has none.
+   * @param \Drupal\Core\Entity\ContentEntityInterface|null $right
+   *   The right revision of the parent, or NULL when it has none.
+   * @param array{left: array<string, array{label: string, values: array<int, string>}>, right: array<string, array{label: string, values: array<int, string>}>} $flat
+   *   The whole flat result of the root comparison.
+   * @param \Drupal\jsonapi\ResourceType\ResourceType $resource_type
+   *   The resource type of the parent.
+   * @param \Drupal\Core\Cache\CacheableMetadata $collector
+   *   Collects the cacheability of every access decision taken here.
+   * @param \Drupal\Core\Session\AccountInterface|null $account
+   *   The account every access decision is taken for.
    *
    * @return list<\Drupal\jsonapi_diff\Comparison\ChildDiff>
    *   The children.
@@ -409,22 +485,163 @@ final readonly class TreeBuilder {
       $left_children = array_diff_key($left_children, $denied);
       $right_children = array_diff_key($right_children, $denied);
       $public_name = $resource_type->getPublicName($name);
+      $pairs = $this->pairByPosition(
+        array_diff_key($left_children, $right_children),
+        array_diff_key($right_children, $left_children),
+        $flat,
+        $collector,
+        $account,
+      );
+      $claimed = array_flip($pairs);
 
       foreach ($left_children as $id => [$left_delta, $left_child]) {
         if (isset($right_children[$id])) {
           [$right_delta, $right_child] = $right_children[$id];
           $status = $left_delta === $right_delta ? ChildDiff::SAME : ChildDiff::MOVED;
-          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, $this->buildEntity($left_child, $right_child, $flat, $collector, FALSE, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, ChildDiff::MATCH_ID, $this->buildEntity($left_child, $right_child, $flat, $collector, FALSE, $account));
+        }
+        elseif (isset($pairs[$id])) {
+          // A positional pair sits at one delta on both sides, so its
+          // status is always `same`. What changed is inside the pair.
+          [$right_delta, $right_child] = $right_children[$pairs[$id]];
+          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, ChildDiff::SAME, ChildDiff::MATCH_POSITION, $this->buildEntity($left_child, $right_child, $flat, $collector, FALSE, $account));
         }
         else {
-          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, $this->buildEntity($left_child, NULL, $flat, $collector, FALSE, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, ChildDiff::MATCH_NONE, $this->buildEntity($left_child, NULL, $flat, $collector, FALSE, $account));
         }
       }
-      foreach (array_diff_key($right_children, $left_children) as [$right_delta, $right_child]) {
-        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, $this->buildEntity(NULL, $right_child, $flat, $collector, FALSE, $account));
+      foreach (array_diff_key($right_children, $left_children, $claimed) as [$right_delta, $right_child]) {
+        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, ChildDiff::MATCH_NONE, $this->buildEntity(NULL, $right_child, $flat, $collector, FALSE, $account));
       }
     }
     return $children;
+  }
+
+  /**
+   * Pairs the children no id matched by the position they hold.
+   *
+   * Two children are a pair when they sit at the same delta of the same
+   * reference field, are of the same entity type and bundle, and hold
+   * content the guard accepts as two versions of one block. The delta is
+   * the one the field gives, not a position within the leftovers, so a
+   * child an id matched keeps its slot and the children around it are not
+   * renumbered into a pairing they do not deserve.
+   *
+   * The pairing is a guess. It is made because the alternative, reporting
+   * every block as removed and added, is not more honest, it is only less
+   * useful. Each pair says how it was found, so a client can tell the
+   * guess from an exact match.
+   *
+   * @param array<int|string, array{int, \Drupal\Core\Entity\ContentEntityInterface}> $left
+   *   The left children no id matched, keyed by entity id.
+   * @param array<int|string, array{int, \Drupal\Core\Entity\ContentEntityInterface}> $right
+   *   The right children no id matched, keyed by entity id.
+   * @param array{left: array<string, array{label: string, values: array<int, string>}>, right: array<string, array{label: string, values: array<int, string>}>} $flat
+   *   The whole flat result of the root comparison.
+   * @param \Drupal\Core\Cache\CacheableMetadata $collector
+   *   Collects the cacheability of every access decision taken here.
+   * @param \Drupal\Core\Session\AccountInterface|null $account
+   *   The account every access decision is taken for.
+   *
+   * @return array<int|string, int|string>
+   *   The id of the right child each paired left child was matched with.
+   */
+  private function pairByPosition(array $left, array $right, array $flat, CacheableMetadata $collector, ?AccountInterface $account): array {
+    $by_delta = [];
+    foreach ($right as $id => [$delta, $entity]) {
+      $by_delta[$delta] = [$id, $entity];
+    }
+    $pairs = [];
+    foreach ($left as $id => [$delta, $entity]) {
+      if (!isset($by_delta[$delta])) {
+        continue;
+      }
+      [$candidate_id, $candidate] = $by_delta[$delta];
+      if ($entity->getEntityTypeId() !== $candidate->getEntityTypeId() || $entity->bundle() !== $candidate->bundle()) {
+        continue;
+      }
+      if (!$this->contentAgrees($entity, $candidate, $flat, $collector, $account)) {
+        continue;
+      }
+      $pairs[$id] = $candidate_id;
+    }
+    return $pairs;
+  }
+
+  /**
+   * Decides whether two entities hold enough in common to be one block.
+   *
+   * The measure is the Dice coefficient over the words of the fields the
+   * document would report for both of them. Two entities that share every
+   * word score 1, two that share none score 0, and an edit to a block
+   * scores near the top of that range. The threshold is the point where
+   * the two texts have as much in common as they do not.
+   *
+   * The words are read from the fields the requesting account may view on
+   * both entities, and from no others, so a field the account cannot read
+   * never decides what the document says.
+   *
+   * Two entities with no comparable text of their own cannot be judged on
+   * their content. A paragraph whose every field recurses is the usual
+   * case. The bundle and the position then decide alone.
+   *
+   * @param \Drupal\Core\Entity\ContentEntityInterface $left
+   *   The candidate from the left side.
+   * @param \Drupal\Core\Entity\ContentEntityInterface $right
+   *   The candidate from the right side.
+   * @param array{left: array<string, array{label: string, values: array<int, string>}>, right: array<string, array{label: string, values: array<int, string>}>} $flat
+   *   The whole flat result of the root comparison.
+   * @param \Drupal\Core\Cache\CacheableMetadata $collector
+   *   Collects the cacheability of every access decision taken here.
+   * @param \Drupal\Core\Session\AccountInterface|null $account
+   *   The account every access decision is taken for.
+   */
+  private function contentAgrees(ContentEntityInterface $left, ContentEntityInterface $right, array $flat, CacheableMetadata $collector, ?AccountInterface $account): bool {
+    $resource_type = $this->resourceTypeRepository->get($left->getEntityTypeId(), $left->bundle());
+    $left_prefix = $this->prefixOf($left);
+    $right_prefix = $this->prefixOf($right);
+    $names = $this->namesUnder($flat['left'], $left_prefix) + $this->namesUnder($flat['right'], $right_prefix);
+
+    $left_words = [];
+    $right_words = [];
+    foreach (array_keys($names) as $name) {
+      if (!$resource_type->isFieldEnabled($name)) {
+        continue;
+      }
+      if (!$this->fieldIsViewable($left, $right, $name, $collector, $account)) {
+        continue;
+      }
+      $left_words = array_merge($left_words, $this->words($flat['left'][$left_prefix . $name]['values'] ?? []));
+      $right_words = array_merge($right_words, $this->words($flat['right'][$right_prefix . $name]['values'] ?? []));
+    }
+
+    $total = count($left_words) + count($right_words);
+    if ($total === 0) {
+      return TRUE;
+    }
+    $right_counts = array_count_values($right_words);
+    $common = 0;
+    foreach (array_count_values($left_words) as $word => $count) {
+      $common += min($count, $right_counts[$word] ?? 0);
+    }
+    return (2 * $common) / $total >= self::SIMILARITY_THRESHOLD;
+  }
+
+  /**
+   * Splits one field's values into lowercase words.
+   *
+   * Punctuation and case are dropped, so a value that only gained a comma
+   * still reads as the same words.
+   *
+   * @param array<int, string> $values
+   *   The value of each delta.
+   *
+   * @return list<string>
+   *   The words, in order.
+   */
+  private function words(array $values): array {
+    $words = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower(implode(' ', $values)), -1, PREG_SPLIT_NO_EMPTY);
+    return $words === FALSE ? [] : $words;
   }
 
   /**

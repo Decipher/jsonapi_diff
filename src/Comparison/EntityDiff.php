@@ -36,7 +36,7 @@ final readonly class EntityDiff {
    * @param string $bundle
    *   The bundle.
    * @param string $uuid
-   *   The entity UUID.
+   *   The entity UUID. The left side's when both sides hold an entity.
    * @param int|null $leftRevisionId
    *   The left revision id, or null when the entity is absent on the left.
    * @param int|null $rightRevisionId
@@ -49,6 +49,12 @@ final readonly class EntityDiff {
    *   The diffs of the entities reached through reference fields.
    * @param \Drupal\Core\Cache\CacheableMetadata $cacheability
    *   The cacheability of everything read to build this diff.
+   * @param string|null $rightUuid
+   *   The UUID of the entity on the right side, when that is a different
+   *   entity from the one on the left. NULL when both sides hold the same
+   *   entity, which is every comparison matched by entity id. It is set
+   *   only by the positional pass, which pairs two entities the two sides
+   *   hold in the same place.
    */
   public function __construct(
     public string $entityTypeId,
@@ -60,6 +66,7 @@ final readonly class EntityDiff {
     public array $summary,
     public array $children,
     public CacheableMetadata $cacheability,
+    public ?string $rightUuid = NULL,
   ) {
     $this->treeSummary = $this->rollUp($summary, $children);
   }

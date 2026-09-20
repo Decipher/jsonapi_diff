@@ -9,6 +9,11 @@ namespace Drupal\jsonapi_diff\Comparison;
  *
  * The deltas locate the child in the parent's reference field on each side.
  * A delta is null on the side where the parent does not reference the child.
+ *
+ * The status says where the child sits. The match says how the two sides
+ * were brought together, because they are not always the same entity. A
+ * client that renders a pair needs both: the status to place it, the match
+ * to say how much to trust it.
  */
 final readonly class ChildDiff {
 
@@ -33,6 +38,21 @@ final readonly class ChildDiff {
   public const string SAME = 'same';
 
   /**
+   * The same entity on both sides, found by entity id. Exact.
+   */
+  public const string MATCH_ID = 'id';
+
+  /**
+   * Two different entities, paired because they share a position. Inferred.
+   */
+  public const string MATCH_POSITION = 'position';
+
+  /**
+   * The child is on one side only, so nothing was paired with it.
+   */
+  public const string MATCH_NONE = 'none';
+
+  /**
    * Constructs a child diff.
    *
    * @param string $field
@@ -43,6 +63,8 @@ final readonly class ChildDiff {
    *   The delta on the right side, or null when absent there.
    * @param string $status
    *   One of the status constants.
+   * @param string $match
+   *   One of the match constants.
    * @param \Drupal\jsonapi_diff\Comparison\EntityDiff $diff
    *   The child's own diff.
    */
@@ -51,6 +73,7 @@ final readonly class ChildDiff {
     public ?int $leftDelta,
     public ?int $rightDelta,
     public string $status,
+    public string $match,
     public EntityDiff $diff,
   ) {}
 
