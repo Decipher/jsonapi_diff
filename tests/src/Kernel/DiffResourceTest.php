@@ -172,10 +172,10 @@ class DiffResourceTest extends KernelTestBase {
     $this->assertCount(4, $children);
     $this->assertCount(4, $document['included']);
 
-    $this->assertSame(['field' => 'field_blocks', 'left_delta' => 0, 'right_delta' => 0, 'status' => 'same'], $this->childMeta($children, $first));
-    $this->assertSame(['field' => 'field_blocks', 'left_delta' => 1, 'right_delta' => 2, 'status' => 'moved'], $this->childMeta($children, $second));
-    $this->assertSame(['field' => 'field_blocks', 'left_delta' => 2, 'right_delta' => 1, 'status' => 'moved'], $this->childMeta($children, $third));
-    $this->assertSame(['field' => 'field_blocks', 'left_delta' => NULL, 'right_delta' => 3, 'status' => 'added'], $this->childMeta($children, $fourth));
+    $this->assertSame(['field' => 'field_blocks', 'left_delta' => 0, 'right_delta' => 0, 'status' => 'same', 'match' => 'id'], $this->childMeta($children, $first));
+    $this->assertSame(['field' => 'field_blocks', 'left_delta' => 1, 'right_delta' => 2, 'status' => 'moved', 'match' => 'id'], $this->childMeta($children, $second));
+    $this->assertSame(['field' => 'field_blocks', 'left_delta' => 2, 'right_delta' => 1, 'status' => 'moved', 'match' => 'id'], $this->childMeta($children, $third));
+    $this->assertSame(['field' => 'field_blocks', 'left_delta' => NULL, 'right_delta' => 3, 'status' => 'added', 'match' => 'none'], $this->childMeta($children, $fourth));
 
     $edited = $this->includedFor($document, $first);
     $this->assertSame('paragraph--block', $edited['relationships']['left']['data']['type']);
@@ -203,6 +203,43 @@ class DiffResourceTest extends KernelTestBase {
   }
 
   /**
+   * A block paired by position names two entities and says so.
+   *
+   * The draft replaced the block with a new entity, so the two sides of
+   * the pair are two paragraphs. The `left` and `right` relationships name
+   * one each, the child identifier's meta says the pair was inferred, and
+   * the resource carries no self link, because the diff route cannot
+   * restate a comparison of two entities.
+   */
+  public function testPositionallyPairedChildNamesBothEntities(): void {
+    $before = $this->createBlock('first block');
+    $node = $this->createArticle(['field_blocks' => $this->references($before), 'uid' => $this->editor->id()]);
+    $after = $this->createBlock('first block, edited');
+    $node = $this->draft($node, ['field_blocks' => $this->references($after)]);
+
+    $document = $this->diff($node);
+
+    $children = $document['data']['relationships']['children']['data'];
+    $this->assertCount(1, $children);
+    $expected_meta = ['field' => 'field_blocks', 'left_delta' => 0, 'right_delta' => 0, 'status' => 'same', 'match' => 'position'];
+    $this->assertSame($expected_meta, $this->childMeta($children, $before));
+
+    $paired = $this->includedFor($document, $before);
+    $this->assertSame($before->uuid(), $paired['relationships']['left']['data']['id']);
+    $this->assertSame($after->uuid(), $paired['relationships']['right']['data']['id']);
+    $this->assertSame('paragraph--block', $paired['relationships']['right']['data']['type']);
+    $this->assertArrayNotHasKey('links', $paired);
+    $body = $paired['attributes']['fields']['field_body'];
+    $this->assertSame('changed', $body['status']);
+    $this->assertSame('first block', $body['left']);
+    $this->assertSame('first block, edited', $body['right']);
+    $tree_summary = $document['data']['attributes']['tree_summary'];
+    $this->assertSame(0, $tree_summary['added']);
+    $this->assertSame(0, $tree_summary['removed']);
+    $this->assertSame(1, $tree_summary['changed']);
+  }
+
+  /**
    * A removed block is reported on the left only.
    */
   public function testRemovedChild(): void {
@@ -215,7 +252,7 @@ class DiffResourceTest extends KernelTestBase {
     $document = $this->diff($node);
 
     $children = $document['data']['relationships']['children']['data'];
-    $this->assertSame(['field' => 'field_blocks', 'left_delta' => 1, 'right_delta' => NULL, 'status' => 'removed'], $this->childMeta($children, $removed));
+    $this->assertSame(['field' => 'field_blocks', 'left_delta' => 1, 'right_delta' => NULL, 'status' => 'removed', 'match' => 'none'], $this->childMeta($children, $removed));
     $gone = $this->includedFor($document, $removed);
     $this->assertNull($gone['relationships']['right']['data']);
     $this->assertSame($removed->uuid() . ':' . $this->blockRevisions($this->loadNodeRevision(1))[(int) $removed->id()] . ':', $gone['id']);

@@ -170,7 +170,7 @@ class DiffDocumentTest extends KernelTestBase {
   public function testTreeSummaryRollsUpTheChildren(): void {
     $child = $this->entityDiff('c1', 5, 6, ['field_body' => new FieldDiff('Body', FieldDiff::CHANGED, 'one', 'two', [], [])]);
     $diff = $this->entityDiff($this->uuid, 1, 2, ['title' => new FieldDiff('Title', FieldDiff::SAME, 'one', 'one', [], [])], [
-      new ChildDiff('field_blocks', 0, 0, ChildDiff::SAME, $child),
+      new ChildDiff('field_blocks', 0, 0, ChildDiff::SAME, ChildDiff::MATCH_ID, $child),
     ]);
     $root = new DiffResourceObject($this->diffType, $this->articleType, $diff, 'id:1', 'id:2');
 
@@ -215,8 +215,8 @@ class DiffDocumentTest extends KernelTestBase {
     $moved = $this->entityDiff('c1', 5, 6);
     $added = $this->entityDiff('c2', NULL, 7);
     $diff = $this->entityDiff($this->uuid, 1, 2, [], [
-      new ChildDiff('field_blocks', 0, 1, ChildDiff::MOVED, $moved),
-      new ChildDiff('field_blocks', NULL, 0, ChildDiff::ADDED, $added),
+      new ChildDiff('field_blocks', 0, 1, ChildDiff::MOVED, ChildDiff::MATCH_ID, $moved),
+      new ChildDiff('field_blocks', NULL, 0, ChildDiff::ADDED, ChildDiff::MATCH_NONE, $added),
     ]);
     $root = new DiffResourceObject($this->diffType, $this->articleType, $diff, 'rel:latest-version', 'rel:working-copy');
     $included = [
@@ -227,8 +227,8 @@ class DiffDocumentTest extends KernelTestBase {
     $document = $this->normalize($root, $included);
 
     $this->assertSame([
-      ['type' => 'jsonapi_diff--diff', 'id' => 'c1:5:6', 'meta' => ['field' => 'field_blocks', 'left_delta' => 0, 'right_delta' => 1, 'status' => 'moved']],
-      ['type' => 'jsonapi_diff--diff', 'id' => 'c2::7', 'meta' => ['field' => 'field_blocks', 'left_delta' => NULL, 'right_delta' => 0, 'status' => 'added']],
+      ['type' => 'jsonapi_diff--diff', 'id' => 'c1:5:6', 'meta' => ['field' => 'field_blocks', 'left_delta' => 0, 'right_delta' => 1, 'status' => 'moved', 'match' => 'id']],
+      ['type' => 'jsonapi_diff--diff', 'id' => 'c2::7', 'meta' => ['field' => 'field_blocks', 'left_delta' => NULL, 'right_delta' => 0, 'status' => 'added', 'match' => 'none']],
     ], $document['data']['relationships']['children']['data']);
     $this->assertCount(2, $document['included']);
     $this->assertSame('c1:5:6', $document['included'][0]['id']);
