@@ -94,6 +94,9 @@ final readonly class TreeBuilder {
       if (!$resource_type->isFieldEnabled($name)) {
         continue;
       }
+      if (!$this->fieldIsViewable($left, $right, $name, $collector)) {
+        continue;
+      }
       $definition = $entity->getFieldDefinition($name);
       $label = $definition !== NULL ? (string) $definition->getLabel() : (string) $entry['#name'];
       $field = $this->buildField(
@@ -126,6 +129,30 @@ final readonly class TreeBuilder {
       $children,
       $is_root ? $collector : $cacheability,
     );
+  }
+
+  /**
+   * Decides whether a field may be viewed on every side that holds it.
+   *
+   * Diff's parser already drops a field the user may not view, but it
+   * returns no cacheability, so the decision is taken again here and
+   * collected. A field denied on one side is dropped from both, so a
+   * denial is never worked around by reading the other side.
+   */
+  private function fieldIsViewable(?ContentEntityInterface $left, ?ContentEntityInterface $right, string $name, CacheableMetadata $collector): bool {
+    $viewable = FALSE;
+    foreach ([$left, $right] as $side) {
+      if (!$side instanceof ContentEntityInterface || !$side->hasField($name)) {
+        continue;
+      }
+      $access = $side->get($name)->access('view', NULL, TRUE);
+      $collector->addCacheableDependency($access);
+      if (!$access->isAllowed()) {
+        return FALSE;
+      }
+      $viewable = TRUE;
+    }
+    return $viewable;
   }
 
   /**
@@ -280,7 +307,9 @@ final readonly class TreeBuilder {
       return [];
     }
     $items = $side->get($name);
-    if (!$items->access('view')) {
+    $access = $items->access('view', NULL, TRUE);
+    $collector->addCacheableDependency($access);
+    if (!$access->isAllowed()) {
       return NULL;
     }
     $children = [];

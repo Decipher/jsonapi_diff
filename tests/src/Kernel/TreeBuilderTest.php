@@ -13,6 +13,7 @@ use Drupal\jsonapi_diff\Comparison\EntityDiff;
 use Drupal\jsonapi_diff\Comparison\FieldDiff;
 use Drupal\jsonapi_diff\Comparison\TreeBuilder;
 use Drupal\jsonapi_diff_test\EventSubscriber\ResourceTypeBuildSubscriber;
+use Drupal\jsonapi_diff_test\TestAccess;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
@@ -453,6 +454,26 @@ class TreeBuilderTest extends KernelTestBase {
 
     $this->assertSame([], $diff->children);
     $this->assertStringNotContainsString('published body', $this->values($diff));
+  }
+
+  /**
+   * Every access decision behind the tree is in its cacheability.
+   *
+   * The field access rule of the test module varies by user and carries a
+   * tag. The paragraph access handler carries the Paragraphs settings. A
+   * response shaped by either has to say so.
+   */
+  public function testAccessDecisionsAreCacheable(): void {
+    $child = $this->createParagraph('block', ['field_body' => 'body']);
+    $node = $this->createNode(['field_text' => 'text', 'field_secret' => 'hidden', 'field_blocks' => $this->references($child)]);
+    $this->reviseParagraph($child);
+    [$left, $right] = $this->revise($node, ['field_text' => 'text changed']);
+
+    $cacheability = $this->builder->build($left, $right)->cacheability;
+
+    $this->assertContains(TestAccess::CACHE_TAG, $cacheability->getCacheTags());
+    $this->assertContains('user', $cacheability->getCacheContexts());
+    $this->assertContains('config:paragraphs.settings', $cacheability->getCacheTags());
   }
 
   /**

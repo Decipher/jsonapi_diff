@@ -8,6 +8,7 @@ use Drupal\Core\Cache\CacheableResponseInterface;
 use Drupal\Core\Http\Exception\CacheableBadRequestHttpException;
 use Drupal\Core\Http\Exception\CacheableNotFoundHttpException;
 use Drupal\jsonapi_diff\Resource\DiffResource;
+use Drupal\jsonapi_diff_test\TestAccess;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\node\Entity\NodeType;
 use Drupal\node\NodeInterface;
@@ -247,6 +248,20 @@ class DiffResourceTest extends KernelTestBase {
     $this->assertCount(1, $document['data']['relationships']['children']['data']);
     $this->assertStringStartsWith($shown->uuid() . ':', $document['data']['relationships']['children']['data'][0]['id']);
     $this->assertSame('shown body, edited', $this->includedFor($document, $shown)['attributes']['fields']['field_body']['right']);
+  }
+
+  /**
+   * The response carries what a per-user field access rule decided.
+   */
+  public function testFieldAccessCacheability(): void {
+    $node = $this->draft($this->createArticle(['field_text' => 'text', 'uid' => $this->editor->id()]), ['field_text' => 'text changed']);
+
+    $response = $this->respond($node, []);
+
+    $this->assertInstanceOf(CacheableResponseInterface::class, $response);
+    $metadata = $response->getCacheableMetadata();
+    $this->assertContains(TestAccess::CACHE_TAG, $metadata->getCacheTags());
+    $this->assertContains('user', $metadata->getCacheContexts());
   }
 
   /**
