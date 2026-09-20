@@ -22,10 +22,13 @@ services:
     decoration_priority: -200
     arguments:
       - '@jsonapi_diff.normalizer.resource_object.inner'
+  # The parser is read rather than Diff's comparison service, because the
+  # comparison joins every delta of a field into one string. The parser keeps
+  # the deltas, so a field can report a status per item.
   jsonapi_diff.tree_builder:
     class: Drupal\jsonapi_diff\Comparison\TreeBuilder
     arguments:
-      - '@diff.entity_comparison'
+      - '@diff.entity_parser'
       - '@plugin.manager.diff.builder'
       - '@jsonapi.resource_type.repository'
       - '@jsonapi_diff.entity_view_check'
