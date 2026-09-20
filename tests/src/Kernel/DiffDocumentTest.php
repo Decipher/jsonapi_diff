@@ -14,6 +14,7 @@ use Drupal\jsonapi\ResourceType\ResourceType;
 use Drupal\jsonapi_diff\Comparison\ChildDiff;
 use Drupal\jsonapi_diff\Comparison\EntityDiff;
 use Drupal\jsonapi_diff\Comparison\FieldDiff;
+use Drupal\jsonapi_diff\Comparison\ItemDiff;
 use Drupal\jsonapi_diff\JsonApiResource\DiffResourceObject;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\node\Entity\Node;
@@ -102,7 +103,8 @@ class DiffDocumentTest extends KernelTestBase {
       ['type' => '-', 'lines' => ['one']],
       ['type' => '+', 'lines' => ['two']],
     ];
-    $fields = ['title' => new FieldDiff('Title', FieldDiff::CHANGED, 'one', 'two', $ops)];
+    $items = [new ItemDiff(0, FieldDiff::CHANGED, 'one', 'two', $ops)];
+    $fields = ['title' => new FieldDiff('Title', FieldDiff::CHANGED, 'one', 'two', $ops, $items)];
     $diff = $this->entityDiff($this->uuid, 1, 2, $fields);
     $root = new DiffResourceObject($this->diffType, $this->articleType, $diff, 'rel:latest-version', 'id:2');
 
@@ -122,15 +124,58 @@ class DiffDocumentTest extends KernelTestBase {
         ['type' => '-', 'lines' => ['one']],
         ['type' => '+', 'lines' => ['two']],
       ],
+      'items' => [
+        [
+          'delta' => 0,
+          'status' => 'changed',
+          'left' => 'one',
+          'right' => 'two',
+          'ops' => [
+            ['type' => '-', 'lines' => ['one']],
+            ['type' => '+', 'lines' => ['two']],
+          ],
+        ],
+      ],
     ], $data['attributes']['fields']['title']);
+  }
+
+  /**
+   * The items of a field encode as a JSON array, empty or not.
+   *
+   * The `fields` map needs a cast to encode as a JSON object. A list of
+   * items needs none, which is why the per-item entries are a list and not
+   * a map keyed by delta.
+   */
+  public function testItemsEncodeAsAnArray(): void {
+    $two = [
+      new ItemDiff(0, FieldDiff::SAME, 'one', 'one', [['type' => '=', 'lines' => ['one']]]),
+      new ItemDiff(1, FieldDiff::ADDED, '', 'two', [['type' => '+', 'lines' => ['two']]]),
+    ];
+    $fields = [
+      'field_lines' => new FieldDiff('Lines', FieldDiff::CHANGED, 'one', "one\ntwo", [], $two),
+      'title' => new FieldDiff('Title', FieldDiff::SAME, 'one', 'one', [], []),
+    ];
+    $diff = $this->entityDiff($this->uuid, 1, 2, $fields);
+    $root = new DiffResourceObject($this->diffType, $this->articleType, $diff, 'id:1', 'id:2');
+    $document = new JsonApiDocumentTopLevel(new ResourceObjectData([$root], 1), new IncludedData([]), new LinkCollection([]));
+
+    $normalization = $this->container->get('jsonapi.serializer')->normalize($document, 'api_json', []);
+    $this->assertInstanceOf(CacheableNormalization::class, $normalization);
+    $json = (string) json_encode($normalization->getNormalization());
+
+    $this->assertStringContainsString('"items":[{"delta":0,', $json);
+    $this->assertStringContainsString('"items":[]', $json);
+    $decoded = json_decode($json, FALSE);
+    $this->assertIsArray($decoded->data->attributes->fields->field_lines->items);
+    $this->assertSame([0, 1], array_column((array) json_decode($json, TRUE)['data']['attributes']['fields']['field_lines']['items'], 'delta'));
   }
 
   /**
    * The tree summary carries the children's counts, the summary does not.
    */
   public function testTreeSummaryRollsUpTheChildren(): void {
-    $child = $this->entityDiff('c1', 5, 6, ['field_body' => new FieldDiff('Body', FieldDiff::CHANGED, 'one', 'two', [])]);
-    $diff = $this->entityDiff($this->uuid, 1, 2, ['title' => new FieldDiff('Title', FieldDiff::SAME, 'one', 'one', [])], [
+    $child = $this->entityDiff('c1', 5, 6, ['field_body' => new FieldDiff('Body', FieldDiff::CHANGED, 'one', 'two', [], [])]);
+    $diff = $this->entityDiff($this->uuid, 1, 2, ['title' => new FieldDiff('Title', FieldDiff::SAME, 'one', 'one', [], [])], [
       new ChildDiff('field_blocks', 0, 0, ChildDiff::SAME, $child),
     ]);
     $root = new DiffResourceObject($this->diffType, $this->articleType, $diff, 'id:1', 'id:2');

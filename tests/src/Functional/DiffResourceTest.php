@@ -234,7 +234,15 @@ class DiffResourceTest extends BrowserTestBase {
     $this->assertSame(0, $document['data']['attributes']['summary']['changed']);
     foreach ($document['data']['attributes']['fields'] as $name => $field) {
       $this->assertSame('same', $field['status'], $name);
+      // A field's items agree with the field, and every field on this node
+      // takes one value, reported at delta 0.
+      $this->assertSame([0], array_column($field['items'], 'delta'), $name);
+      $this->assertSame(['same'], array_column($field['items'], 'status'), $name);
     }
+    $item = $document['data']['attributes']['fields']['field_text']['items'][0];
+    $this->assertSame('text', $item['left']);
+    $this->assertSame('text', $item['right']);
+    $this->assertSame([['type' => '=', 'lines' => ['text']]], $item['ops']);
   }
 
   /**

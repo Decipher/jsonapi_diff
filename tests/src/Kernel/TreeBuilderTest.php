@@ -145,6 +145,187 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * One changed item among unchanged ones is reported on its own.
+   *
+   * This is the case the whole-field status cannot express. The field is
+   * `changed`, and only the item at delta 1 is.
+   */
+  public function testOneChangedItemAmongUnchangedItems(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two', 'three']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['one', 'two changed', 'three']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::SAME,
+      1 => FieldDiff::CHANGED,
+      2 => FieldDiff::SAME,
+    ], $this->itemStatuses($field));
+    $changed = $field->items[1];
+    $this->assertSame(1, $changed->delta);
+    $this->assertSame('two', $changed->left);
+    $this->assertSame('two changed', $changed->right);
+    $this->assertSame([
+      ['type' => '-', 'lines' => ['two']],
+      ['type' => '+', 'lines' => ['two changed']],
+    ], $changed->ops);
+    $this->assertSame([['type' => '=', 'lines' => ['three']]], $field->items[2]->ops);
+  }
+
+  /**
+   * An item the right side gained is added, the rest unchanged.
+   */
+  public function testMultiValueFieldItemAdded(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['one', 'two', 'three']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::SAME,
+      1 => FieldDiff::SAME,
+      2 => FieldDiff::ADDED,
+    ], $this->itemStatuses($field));
+    $added = $field->items[2];
+    $this->assertSame('', $added->left);
+    $this->assertSame('three', $added->right);
+    $this->assertSame([['type' => '+', 'lines' => ['three']]], $added->ops);
+  }
+
+  /**
+   * An item the right side dropped from the end is removed.
+   */
+  public function testMultiValueFieldItemRemoved(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two', 'three']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['one', 'two']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::SAME,
+      1 => FieldDiff::SAME,
+      2 => FieldDiff::REMOVED,
+    ], $this->itemStatuses($field));
+    $removed = $field->items[2];
+    $this->assertSame('three', $removed->left);
+    $this->assertSame('', $removed->right);
+    $this->assertSame([['type' => '-', 'lines' => ['three']]], $removed->ops);
+  }
+
+  /**
+   * One item changed and another added are two statuses in one field.
+   */
+  public function testMultiValueFieldItemChangedAndAnotherAdded(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['one changed', 'two', 'three']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::CHANGED,
+      1 => FieldDiff::SAME,
+      2 => FieldDiff::ADDED,
+    ], $this->itemStatuses($field));
+  }
+
+  /**
+   * A field of cardinality one carries the item at delta 0.
+   *
+   * Every field has items, so a client iterates them without asking the
+   * field's cardinality first, and delta 0 addresses the value.
+   */
+  public function testSingleValueFieldCarriesOneItem(): void {
+    [$left, $right] = $this->revise($this->createNode(['field_text' => 'first draft']), ['field_text' => 'second draft']);
+
+    $field = $this->builder->build($left, $right)->fields['field_text'];
+
+    $this->assertCount(1, $field->items);
+    $item = $field->items[0];
+    $this->assertSame(0, $item->delta);
+    $this->assertSame(FieldDiff::CHANGED, $item->status);
+    $this->assertSame('first draft', $item->left);
+    $this->assertSame('second draft', $item->right);
+    $this->assertSame($field->ops, $item->ops);
+  }
+
+  /**
+   * Items align by delta, so dropping the first item shifts the rest.
+   *
+   * A delta is a position, not an identity. The left side holds three items
+   * and the right side holds the third one only. Aligning by position pairs
+   * `one` with `three` and reports the two trailing positions as removed. A
+   * reader looking for "two items removed from the front" does not get it,
+   * because a field item carries nothing to match it on across revisions.
+   */
+  public function testSidesWithDifferentCountsAlignByPosition(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two', 'three']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['three']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::CHANGED,
+      1 => FieldDiff::REMOVED,
+      2 => FieldDiff::REMOVED,
+    ], $this->itemStatuses($field));
+    $this->assertSame('one', $field->items[0]->left);
+    $this->assertSame('three', $field->items[0]->right);
+  }
+
+  /**
+   * An item's operations cover that item's lines and no other item's.
+   *
+   * Both items hold two lines. The whole field's operations read the four
+   * lines as one text. Each item's operations stop at the item.
+   */
+  public function testItemOpsCoverOneItemOnly(): void {
+    $node = $this->createNode(['field_lines' => ["one\ntwo", "three\nfour"]]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ["one\ntwo", "three\nfive"]]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame([
+      ['type' => '=', 'lines' => ['one', 'two', 'three']],
+      ['type' => '-', 'lines' => ['four']],
+      ['type' => '+', 'lines' => ['five']],
+    ], $field->ops);
+    $this->assertSame([['type' => '=', 'lines' => ['one', 'two']]], $field->items[0]->ops);
+    $this->assertSame([
+      ['type' => '=', 'lines' => ['three']],
+      ['type' => '-', 'lines' => ['four']],
+      ['type' => '+', 'lines' => ['five']],
+    ], $field->items[1]->ops);
+    $this->assertSame(FieldDiff::SAME, $field->items[0]->status);
+    $this->assertSame(FieldDiff::CHANGED, $field->items[1]->status);
+  }
+
+  /**
+   * A field denied on one side only is absent from both, with no items.
+   *
+   * The access rule the module takes itself judges every side. The left
+   * side of this field is viewable and the right side is not, so neither
+   * side is served and no item leaks the value the reader may see.
+   */
+  public function testFieldDeniedOnOneSideIsAbsentFromBoth(): void {
+    $node = $this->createNode(['field_text' => 'text', 'field_lines' => ['visible one']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['visible one', TestAccess::RESTRICTED_VALUE]]);
+    $this->assertTrue($left->get('field_lines')->access('view'));
+    $this->assertFalse($right->get('field_lines')->access('view'));
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertArrayNotHasKey('field_lines', $diff->fields);
+    $this->assertStringNotContainsString('visible one', $this->values($diff));
+    $this->assertSame(count($diff->fields), array_sum($diff->summary));
+    $this->assertContains(TestAccess::CACHE_TAG, $diff->cacheability->getCacheTags());
+  }
+
+  /**
    * Swapped blocks are moved, and their own fields are the same.
    */
   public function testSwappedBlocksAreMoved(): void {
@@ -678,6 +859,20 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * Lists the status of each of a field's items, keyed by delta.
+   *
+   * @return array<int, string>
+   *   The statuses.
+   */
+  protected function itemStatuses(FieldDiff $field): array {
+    $statuses = [];
+    foreach ($field->items as $item) {
+      $statuses[$item->delta] = $item->status;
+    }
+    return $statuses;
+  }
+
+  /**
    * Collects every compared value in a tree, at any depth.
    */
   protected function values(EntityDiff $diff): string {
@@ -686,6 +881,10 @@ class TreeBuilderTest extends KernelTestBase {
       $values[] = $field->label;
       $values[] = $field->left;
       $values[] = $field->right;
+      foreach ($field->items as $item) {
+        $values[] = $item->left;
+        $values[] = $item->right;
+      }
     }
     foreach ($diff->children as $child) {
       $values[] = $this->values($child->diff);
