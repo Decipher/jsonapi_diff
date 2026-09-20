@@ -29,7 +29,13 @@ use Drupal\jsonapi_diff\Comparison\ItemDiff;
  * `right` point at the compared entity, with the version in the identifier's
  * meta and the individual URL of that version as the `related` link.
  * `children` lists the diffs of the entities the comparison recursed into,
- * with each child's place in the parent recorded in its identifier's meta.
+ * with each child's place in the parent, and how the two sides of it were
+ * matched, recorded in its identifier's meta.
+ *
+ * `left` and `right` usually name one entity at two revisions. A pair the
+ * positional pass made names two entities, so the two relationships differ
+ * and the resource carries no self link: the diff route compares revisions
+ * of one entity and cannot restate that pair.
  *
  * A sparse fieldset needs nothing here. Core's resource object normalizer
  * keeps the members the fieldset names and drops the rest, and it does that
@@ -121,17 +127,21 @@ final class DiffResourceObject extends ResourceObject {
         ], $field->items),
       ], $diff->fields),
       'left' => $this->side('left', $entity_type, $diff->uuid, $diff->leftRevisionId, $left_version),
-      'right' => $this->side('right', $entity_type, $diff->uuid, $diff->rightRevisionId, $right_version),
+      'right' => $this->side('right', $entity_type, $diff->rightUuid ?? $diff->uuid, $diff->rightRevisionId, $right_version),
       'children' => DiffRelationship::create($this, 'children', array_map(static fn (ChildDiff $child): ResourceIdentifier => new ResourceIdentifier($diff_type, self::idFor($child->diff), [
         'field' => $child->field,
         'left_delta' => $child->leftDelta,
         'right_delta' => $child->rightDelta,
         'status' => $child->status,
+        'match' => $child->match,
       ]), $diff->children), -1),
     ];
 
+    // A pair of two entities has no route of its own. The diff route
+    // compares two revisions of one entity, so a self link would name a
+    // different comparison from the one this resource holds.
     $links = [];
-    if ($left_version !== NULL && $right_version !== NULL) {
+    if ($left_version !== NULL && $right_version !== NULL && $diff->rightUuid === NULL) {
       $url = Url::fromRoute('jsonapi_diff.diff', [
         'entity_type' => $diff->entityTypeId,
         'bundle' => $diff->bundle,
@@ -153,6 +163,9 @@ final class DiffResourceObject extends ResourceObject {
    * The id is the entity UUID and the two revision ids. It is the same for
    * every request that compares the same pair, whatever the versions were
    * called. A side the entity is absent from has an empty segment.
+   *
+   * A pair of two entities is named by the left one. An entity holds one
+   * place on one side, so the id stays unique inside the document.
    */
   public static function idFor(EntityDiff $diff): string {
     return sprintf('%s:%s:%s', $diff->uuid, $diff->leftRevisionId ?? '', $diff->rightRevisionId ?? '');
