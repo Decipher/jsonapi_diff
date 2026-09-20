@@ -88,7 +88,7 @@ final readonly class RevisionPairResolver {
       throw new CacheableAccessDeniedHttpException($cacheability, $message);
     }
 
-    return new RevisionPair($left_revision, $right_revision, $left, $right, $cacheability);
+    return new RevisionPair($left_revision, $right_revision, $left, $right, $cacheability, $account);
   }
 
   /**

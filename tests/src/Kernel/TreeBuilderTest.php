@@ -22,6 +22,7 @@ use Drupal\paragraphs\Entity\Paragraph;
 use Drupal\paragraphs\Entity\ParagraphsType;
 use Drupal\paragraphs\ParagraphInterface;
 use Drupal\Tests\user\Traits\UserCreationTrait;
+use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\Group;
 
 /**
@@ -496,6 +497,51 @@ class TreeBuilderTest extends KernelTestBase {
     $this->assertContains(TestAccess::CACHE_TAG, $cacheability->getCacheTags());
     $this->assertContains('user', $cacheability->getCacheContexts());
     $this->assertContains('config:paragraphs.settings', $cacheability->getCacheTags());
+  }
+
+  /**
+   * The tree is judged for the account the resolver judged, not the session.
+   *
+   * The route only ever resolves for the current user today. This pins the
+   * account the pair carries, so a caller that passes one cannot have the
+   * root judged for that account and the tree for another.
+   */
+  public function testTreeFollowsTheResolvedAccount(): void {
+    // Paragraphs only honours the permission when the site opts in.
+    $this->installConfig(['paragraphs']);
+    $draft = $this->createParagraph('block', ['field_body' => 'reviewer only body', 'status' => 0]);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($draft)]);
+    $reviewer = $this->asAccount($this->createUser(['access content', 'view all revisions', 'view unpublished paragraphs']));
+    $this->assertTrue($draft->access('view', $reviewer));
+    $this->assertFalse($draft->access('view'));
+    $revision = $this->loadNodeRevision((int) $node->getRevisionId());
+
+    $pair = $this->container->get('jsonapi_diff.revision_pair_resolver')->resolve($revision, NULL, NULL, $reviewer);
+    $tree = $this->builder->build($pair->left, $pair->right, $pair->account);
+
+    $this->assertSame($reviewer->id(), $pair->account?->id());
+    $this->assertCount(1, $tree->children);
+    $this->assertSame($draft->uuid(), $tree->children[0]->diff->uuid);
+    $this->assertStringContainsString('reviewer only body', $this->values($tree));
+
+    // The same pair, built for the session's user, drops the paragraph.
+    $session = $this->builder->build($pair->left, $pair->right);
+    $this->assertSame([], $session->children);
+    $this->assertStringNotContainsString('reviewer only body', $this->values($session));
+  }
+
+  /**
+   * Narrows a created user to an account.
+   *
+   * Drupal 10's stubs return User|false from the user creation helpers, and
+   * Drupal 11's return UserInterface. The parameter is untyped so the check
+   * is neither redundant on 11 nor missing on 10.
+   */
+  protected function asAccount(mixed $account): UserInterface {
+    if (!$account instanceof UserInterface) {
+      throw new \LogicException('The user was not created.');
+    }
+    return $account;
   }
 
   /**
