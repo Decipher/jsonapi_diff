@@ -57,11 +57,31 @@ changed without rendering Drupal's admin theme.
   `?fields[jsonapi_diff--diff]=tree_summary` returns the counts alone. A fieldset
   trims every diff in the document, the nested ones as well as the primary data,
   and two fieldsets are cached separately.
+- Positional alignment of the children no entity id matched. A draft that
+  replaced its paragraphs with new entities, which a script or an import does,
+  used to report every block as removed and added. The children left over after
+  the id pass are now paired by the position they hold, so such a draft reports
+  the block it edited and leaves the rest alone. A pair must sit at the same
+  delta of the same field, be of the same entity type and bundle, and share at
+  least half its words with the other side, measured over the fields the reader
+  may view. Below that the two stay an honest removal and addition.
+- `match` on every child identifier's `meta`, saying how the two sides were
+  brought together: `id` for the same entity on both sides, `position` for a
+  pair the module inferred, and `none` for a child only one side has. A
+  positional pair also names two different entities in its `left` and `right`
+  relationships and carries no `self` link, because the route compares
+  revisions of one entity and cannot restate such a pair.
 
 ### Known limitations
 
-- Nested entities are matched by entity id, so a workflow that creates new
-  paragraph entities per draft reports every block as removed and added.
+- Positional alignment reads a page that kept its shape. An insertion or a
+  deletion shifts every block after it out of its position, a block rewritten
+  from scratch no longer shares enough words to be paired, and two replaced
+  blocks that swapped places are not seen as moved. Each of those falls back to
+  removed and added.
+- A positional pair is a guess, and `match: position` is the only warning the
+  document gives. Two blocks of one bundle that happen to share their words are
+  paired.
 - A field's items are paired by delta, because a field item carries no id. An
   item inserted before another shifts it, so the positions after an insertion
   read as changed rather than as one insertion.
