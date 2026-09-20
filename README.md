@@ -384,16 +384,49 @@ what is present, so a field dropped by JSON:API or by field access is not in the
 totals, and the four counts always add up to the number of entries in `fields`.
 Children are not counted, because each child has a summary of its own.
 
+### Asking for less
+
+The diff type takes a JSON:API sparse fieldset, so a client that wants the
+counts and nothing else asks for them:
+
+```bash
+curl -H 'Accept: application/vnd.api+json' \
+  'https://example.com/jsonapi/diff/node/article/85924444-4579-493c-8658-e654df08ff08?fields%5Bjsonapi_diff--diff%5D=summary'
+```
+
+The fieldset names members of the diff resource, in any combination:
+
+| Member | Holds |
+| --- | --- |
+| `summary` | The counts |
+| `fields` | Every compared field, with both sides and the line operations |
+| `left`, `right` | The compared entity at each version |
+| `children` | The identifiers of the nested diffs |
+
+`type` and `id` are always present, as the specification requires. A member the
+fieldset leaves out is absent from the resource, and a name that is not a member
+of the type is ignored, which is what core does with one on its own routes.
+
+A fieldset belongs to a resource type rather than to a place in the document, so
+it trims every diff in the response, the children in `included` as well as the
+primary data. It trims members and not the tree: a fieldset without `children`
+drops that relationship from each resource, and the nested diffs stay in
+`included`. A response is cached per fieldset.
+
+`?include` is ignored, because the tree is already whole. There is nothing left
+to ask for.
+
 ### Caching
 
 Every response includes the cache tags of both compared revisions and of every
 entity in the tree, the tags of Diff's own configuration, and cache contexts for
-`leftVersion`, `rightVersion`, the user's permissions and the content language.
-The cacheability of every access decision is included, allowed or denied, so a
-`403` served to one user is not then served to a user who is allowed.
+`leftVersion`, `rightVersion`, the sparse fieldset, the user's permissions and
+the content language. The cacheability of every access decision is included,
+allowed or denied, so a `403` served to one user is not then served to a user
+who is allowed.
 
-Saving the entity again invalidates the cached diff. Two different version pairs
-are cached separately.
+Saving the entity again invalidates the cached diff. A different version pair is
+a different cache entry, and so is a different fieldset.
 
 ## Reading the tree in a client
 
@@ -649,9 +682,10 @@ it did.
   frontend knows how it laid the page out.
 - **No write operations.** The route is `GET` only. Nothing here reverts a revision,
   publishes a draft or edits a field. Core's own routes do that.
-- **No way to ask for less.** Sparse fieldset support, `include` filtering and
-  pagination are all absent, so the whole tree comes back every time, with the
-  full text of unchanged fields in it.
+- **No way to ask for a smaller tree.** A sparse fieldset trims each resource's
+  members, and that is the whole of it. There is no `include` filtering, no
+  pagination, and no way to leave out the fields whose status is `same`, so
+  every entity the comparison reached comes back every time.
 
 ## For module maintainers
 
@@ -674,8 +708,7 @@ output.
 **The document shape is alpha.** The tests pin the resource type name, the `id`
 format, the four field statuses, the four child statuses and the `ops` operation
 types, so none of those moves without a red pipeline here first. Treat `meta` as
-open for additional keys, and expect sparse fieldset support before 1.0, which
-will stop the whole tree coming back every time.
+open for additional keys.
 
 ## FAQ
 
@@ -683,8 +716,10 @@ will stop the whole tree coming back every time.
 
 **A:** Because the client this was built for needs the text anyway to render the
 page, so sending it once with the diff saves a second request. It does make a
-large tree a large payload. Trimming it belongs in a later release, as a sparse
-fieldset, which is the JSON:API way to ask for less.
+large tree a large payload. A client that does not need the text asks for
+`fields[jsonapi_diff--diff]=summary,children` and walks the tree on the counts,
+then fetches the one diff it wants to show in full. A fieldset cannot keep
+`fields` and drop the entries whose status is `same`.
 
 **Q: Can I diff a paragraph on its own?**
 

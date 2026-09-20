@@ -134,6 +134,67 @@ class DiffResourceTest extends BrowserTestBase {
   }
 
   /**
+   * A sparse fieldset trims the members of every diff in the document.
+   */
+  public function testSparseFieldsetTrimsEveryDiff(): void {
+    [$node] = $this->createReshapedArticle(['uid' => $this->editor->id()]);
+    $this->drupalLogin($this->editor);
+
+    $whole = $this->fetch($this->path($node));
+    $this->assertSame(['summary', 'fields'], array_keys($whole['data']['attributes']));
+    $this->assertSame(['left', 'right', 'children'], array_keys($whole['data']['relationships']));
+
+    $document = $this->fetch($this->path($node), $this->fieldset('summary'));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $data = $document['data'];
+    $this->assertSame('jsonapi_diff--diff', $data['type']);
+    $this->assertSame($node->uuid() . ':1:2', $data['id']);
+    $this->assertSame(['summary'], array_keys($data['attributes']));
+    $this->assertArrayNotHasKey('relationships', $data);
+
+    // A fieldset belongs to a type, so it trims the children the same way.
+    $this->assertCount(4, $document['included']);
+    foreach ($document['included'] as $child) {
+      $this->assertSame(['summary'], array_keys($child['attributes']), $child['id']);
+      $this->assertArrayNotHasKey('relationships', $child);
+    }
+  }
+
+  /**
+   * A fieldset that names relationships keeps those and drops the rest.
+   */
+  public function testSparseFieldsetNamesRelationships(): void {
+    [$node] = $this->createReshapedArticle(['uid' => $this->editor->id()]);
+    $this->drupalLogin($this->editor);
+
+    $document = $this->fetch($this->path($node), $this->fieldset('left,children'));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertArrayNotHasKey('attributes', $document['data']);
+    $this->assertSame(['left', 'children'], array_keys($document['data']['relationships']));
+    $this->assertCount(4, $document['data']['relationships']['children']['data']);
+  }
+
+  /**
+   * An unknown member is ignored, which is what core's own route does.
+   */
+  public function testSparseFieldsetIgnoresAnUnknownMember(): void {
+    $node = $this->createArticle(['field_text' => 'text', 'uid' => $this->editor->id()]);
+    $this->drupalLogin($this->editor);
+
+    $document = $this->fetch($this->path($node), $this->fieldset('summary,nope'));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertSame(['summary'], array_keys($document['data']['attributes']));
+
+    $core = $this->fetch('/jsonapi/node/article/' . $node->uuid(), ['fields' => ['node--article' => 'title,nope']]);
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertSame(['title'], array_keys($core['data']['attributes']));
+  }
+
+  /**
    * A revision compared with itself has status same everywhere.
    */
   public function testSameRevision(): void {
@@ -412,8 +473,9 @@ class DiffResourceTest extends BrowserTestBase {
    *
    * @param string $path
    *   The path, or an absolute URL from a link.
-   * @param array<string, string> $query
-   *   The query parameters.
+   * @param array<string, string|array<string, string>> $query
+   *   The query parameters. A nested array is a bracketed parameter, as a
+   *   sparse fieldset is.
    *
    * @return array<string, mixed>
    *   The decoded document, or an empty array when the body is not JSON.
