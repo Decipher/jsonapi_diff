@@ -190,16 +190,45 @@ and one of the four `included` resources:
           "status": "same",
           "left": "admin",
           "right": "admin",
-          "ops": [{ "type": "=", "lines": ["admin"] }]
+          "ops": [{ "type": "=", "lines": ["admin"] }],
+          "items": [
+            {
+              "delta": 0,
+              "status": "same",
+              "left": "admin",
+              "right": "admin",
+              "ops": [{ "type": "=", "lines": ["admin"] }]
+            }
+          ]
         },
-        "title": {
-          "label": "Title",
+        "field_tags": {
+          "label": "Tags",
           "status": "changed",
-          "left": "Diff demo article",
-          "right": "Diff demo article (draft)",
+          "left": "Drupal\nJSON:API",
+          "right": "Drupal\nDecoupled",
           "ops": [
-            { "type": "-", "lines": ["Diff demo article"] },
-            { "type": "+", "lines": ["Diff demo article (draft)"] }
+            { "type": "=", "lines": ["Drupal"] },
+            { "type": "-", "lines": ["JSON:API"] },
+            { "type": "+", "lines": ["Decoupled"] }
+          ],
+          "items": [
+            {
+              "delta": 0,
+              "status": "same",
+              "left": "Drupal",
+              "right": "Drupal",
+              "ops": [{ "type": "=", "lines": ["Drupal"] }]
+            },
+            {
+              "delta": 1,
+              "status": "changed",
+              "left": "JSON:API",
+              "right": "Decoupled",
+              "ops": [
+                { "type": "-", "lines": ["JSON:API"] },
+                { "type": "+", "lines": ["Decoupled"] }
+              ]
+            }
           ]
         }
       }
@@ -282,6 +311,18 @@ and one of the four `included` resources:
             "ops": [
               { "type": "-", "lines": ["first block"] },
               { "type": "+", "lines": ["first block, edited in the draft"] }
+            ],
+            "items": [
+              {
+                "delta": 0,
+                "status": "changed",
+                "left": "first block",
+                "right": "first block, edited in the draft",
+                "ops": [
+                  { "type": "-", "lines": ["first block"] },
+                  { "type": "+", "lines": ["first block, edited in the draft"] }
+                ]
+              }
             ]
           }
         }
@@ -376,11 +417,46 @@ Diff's order and not the resource type's.
 | `left` | The left value as one string |
 | `right` | The right value as one string |
 | `ops` | Line operations from `left` to `right` |
+| `items` | The same four, per item of the field |
 
 Each entry in `ops` is `{"type": ..., "lines": [...]}`, where `type` is `=` for
 carried lines, `-` for removed and `+` for added, and `lines` holds them in
 order with no markup. A changed line arrives as a `-` followed by a `+`, which
 is the pair a client needs to run its own word diff over the change.
+
+### The items of a field
+
+`items` reports the same comparison per item, so a client can narrow a change to
+the item that carries it rather than highlighting the whole field. It is a JSON
+array in delta order, and each entry is:
+
+| Key | Holds |
+| --- | --- |
+| `delta` | The item's position in the field, on both sides |
+| `status` | `added`, `removed`, `changed` or `same` |
+| `left` | That item's left value |
+| `right` | That item's right value |
+| `ops` | Line operations from that item's `left` to its `right` |
+
+The `ops` of an item have the same three types as a field's, and cover that item
+only, so a field of two multi-line values gives each value its own operations
+instead of one run over the joined text.
+
+Every field has items, whatever its cardinality: a field of cardinality one
+reports one item at delta 0. A client iterates `items` without first asking how
+many values the field takes, and `entity uuid` plus public field name plus
+`delta` addresses any change in the document.
+
+A field's own `status` follows from its items. One status shared by every item
+is the field's status, and a mix of statuses is `changed`. The two can never
+disagree: a field reported as `same` has no item that is not, and a field
+reported as `changed` has at least one item that is not `same`.
+
+`summary` and `tree_summary` count fields, not items. A field with ten items and
+one change counts as one `changed` field in both.
+
+The two sides' items are paired by delta, which is a position and not an
+identity. See the limitation below for what that cannot tell you.
 
 ### Summary and tree summary
 
@@ -431,7 +507,7 @@ The fieldset names members of the diff resource, in any combination:
 | --- | --- |
 | `summary` | The counts for the entity's own fields |
 | `tree_summary` | The counts for the entity and everything below it |
-| `fields` | Every compared field, with both sides and the line operations |
+| `fields` | Every compared field, with both sides, the line operations and the items |
 | `left`, `right` | The compared entity at each version |
 | `children` | The identifiers of the nested diffs |
 
@@ -476,8 +552,13 @@ const byId = new Map(
 function walk(diff, depth = 0) {
   const pad = '  '.repeat(depth)
   for (const [name, field] of Object.entries(diff.attributes.fields)) {
-    if (field.status !== 'same') {
-      console.log(`${pad}${name}: ${field.status}`)
+    if (field.status === 'same') {
+      continue
+    }
+    // The items narrow a change to the value that carries it, so a gallery
+    // with one new image highlights one image and not the whole field.
+    for (const item of field.items.filter((item) => item.status !== 'same')) {
+      console.log(`${pad}${name}[${item.delta}]: ${item.status}`)
     }
   }
   for (const child of diff.relationships.children.data) {
@@ -675,20 +756,27 @@ and save a new revision of it rather than creating a replacement. Positional
 alignment, for the cases where that is impossible, is a candidate for a later
 release.
 
-### A multi-value field has one status for the whole field
+### A field's items are matched by position
 
-Diff joins a field's values into one string, one value per line, before
-comparing. This module reports one status, one `left`, one `right` and one `ops`
-list for the field as a whole. So a gallery of six images with one image swapped
-is one `changed` field, not five `same` items beside one `changed` item.
+`items` pairs the two sides by delta, because a delta is all a field item has.
+Unlike a referenced entity, an item carries no id that survives a save, so there
+is nothing else to match it on.
 
-`ops` still shows which line moved, so a client can work out which value changed
-by matching lines back to deltas. That holds when a value renders as one line,
-which most do, and it breaks down when a value renders as several.
+That reports an edit in place exactly: a gallery of six images with the fourth
+swapped is five `same` items and one `changed` item. It reports an insertion
+less well. An item added at the front shifts every item after it, so each
+position now holds the item that used to sit before it, and the field reads as a
+run of `changed` items with one `added` at the end. Nothing was lost, but the
+report says "these positions changed" where a reader wanted "one item was
+inserted here".
 
-**What to do:** read `ops` rather than the field status when per-value detail
-matters, and read `changed` on a multi-value field as "something in here
-changed".
+Appending and truncating are unaffected, because neither shifts an existing
+position.
+
+**What to do:** for content where insertion order matters and the items are
+substantial, model the items as referenced entities. Those are matched by entity
+id under `children`, which survives reordering, and each one then reports
+`added`, `removed` or `moved` on its own.
 
 ### A recursed reference field has no entry of its own
 
