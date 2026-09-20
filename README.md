@@ -368,11 +368,16 @@ and one of the four `included` resources:
 ### Left and right
 
 `left` and `right` each carry one resource identifier of the compared entity,
-not of a diff. Both point at the same entity, because both sides are revisions
-of it. The revision is in the identifier's `meta`: `resourceVersion` repeats the
-identifier for that side, and `drupal_internal__revision_id` gives the revision
-it resolved to. `links.related` is the individual JSON:API URL of that version,
-so following it fetches the whole revision from core's own route.
+not of a diff. They usually point at the same entity, because both sides are
+revisions of it. The revision is in the identifier's `meta`: `resourceVersion`
+repeats the identifier for that side, and `drupal_internal__revision_id` gives
+the revision it resolved to. `links.related` is the individual JSON:API URL of
+that version, so following it fetches the whole revision from core's own route.
+
+On a child whose `meta.match` is `position`, the two identifiers name two
+different entities, because that pair is two blocks the module read as one. Such
+a resource carries no `self` link: the diff route compares revisions of one
+entity and has no URL that restates a pair of two.
 
 Both versions cannot appear in `included`. A JSON:API compound document holds
 each type and id pair once, and the two versions share both. The `related` links
@@ -392,10 +397,22 @@ identifier's `meta` says where that child sat:
 | `left_delta` | Its position on the left, or `null` when the left side lacks it |
 | `right_delta` | Its position on the right, or `null` when the right side lacks it |
 | `status` | `same`, `moved`, `added` or `removed` |
+| `match` | `id`, `position` or `none`, how the two sides were brought together |
 
 `moved` means the same entity at a different position. Its own fields are still
 reported on their own merits, so a block that was only reordered is `moved` with
 every field `same`. A client that wants one badge per block combines the two.
+
+`match` says how much to trust the pair. `id` is the same entity on both sides,
+found by entity id, and it is exact. `position` is two different entities the
+module paired because they hold the same place in the same field, and it is a
+guess: see "Blocks with no id in common are paired by position" below for what
+the guess is guarded by and where it stops. `none` is a child only one side has,
+so nothing was paired with it, and it always sits beside a `status` of `added`
+or `removed`.
+
+A client that will not act on a guess filters on `match === 'id'`. A client that
+shows an editor what changed reads `position` too, and can mark it as inferred.
 
 Recursion follows Diff's own rule. A reference field is walked when its Diff
 builder plugin offers up the referenced entities. In practice that means
@@ -489,7 +506,8 @@ Reach for `tree_summary` on a child rather than `children[].meta.status`. The
 `meta` status is about the reference: whether that block was added, removed,
 moved or left where it was. A block whose text was rewritten in place keeps its
 id and its position, so its `meta.status` is `same` while its own
-`tree_summary` reports the change.
+`tree_summary` reports the change. A block paired by position reads the same
+way, because that pair holds one position on both sides too.
 
 ### Asking for less
 
@@ -562,7 +580,9 @@ function walk(diff, depth = 0) {
     }
   }
   for (const child of diff.relationships.children.data) {
-    console.log(`${pad}${child.meta.field}[${child.meta.right_delta}]: ${child.meta.status}`)
+    // A pair found by position is a guess. Say so rather than hide it.
+    const inferred = child.meta.match === 'position' ? ' (matched by position)' : ''
+    console.log(`${pad}${child.meta.field}[${child.meta.right_delta}]: ${child.meta.status}${inferred}`)
     walk(byId.get(child.id), depth + 1)
   }
 }
@@ -739,22 +759,54 @@ A field drops out of the document for one of these reasons:
 This module reports the cases below less precisely than a reader might expect.
 Every one has a workaround, and none of them is a defect in the code.
 
-### Children are matched by entity id
+### Blocks with no id in common are paired by position
 
-Diff aligns referenced entities by entity id, and so does this module. A draft
-holding new revisions of the same paragraphs compares cleanly. A workflow that
-creates brand new paragraph entities for each draft reports every block as
-`removed` and every replacement as `added`, because to the comparison they are
-different entities that happen to hold similar text.
+Children are matched by entity id first. A draft holding new revisions of the
+same paragraphs, which is what Drupal's own paragraphs UI produces, matches
+exactly and reports `match: id`.
 
-Drupal's own paragraphs UI does the right thing here: editing a node creates new
-revisions of the existing paragraphs and the ids survive. The problem shows up in
-custom code and in import flows that rebuild the field from scratch.
+A workflow that creates brand new paragraph entities for each draft leaves that
+pass with nothing to match. The children it did not match are then paired by the
+position they hold in the reference field, and each such pair reports
+`match: position`. That is a guess, and it is guarded:
 
-**What to do:** keep the entity ids across drafts. Load the existing paragraph
-and save a new revision of it rather than creating a replacement. Positional
-alignment, for the cases where that is impossible, is a candidate for a later
-release.
+- Both sides must sit at the same delta of the same reference field. The delta
+  is the field's own, so a block an id matched keeps its slot and the blocks
+  around it are not shifted into a pairing they do not deserve.
+- Both sides must be the same entity type and bundle. Two bundles are two
+  different things whatever they hold.
+- Both sides must share at least half their words, measured as a Dice
+  coefficient over the words of the fields the document reports for both of
+  them. Below that, the two are left as an honest `removed` and `added`.
+
+A pair sits at one position on both sides, so its `status` is always `same`. What
+changed is inside it, in that child's own `fields` and `tree_summary`, exactly as
+for a block edited in place.
+
+**What positional alignment cannot do.** It reads a page that kept its shape. It
+does not recover a page that did not:
+
+- **An insertion or a deletion shifts everything after it.** Delete the first of
+  five replaced blocks and every later block now sits one position earlier. Each
+  new pairing is then a block against the one beside it, which the word guard
+  usually rejects, so the report falls back to `removed` and `added` for the
+  whole run. That is the honest answer and not a useful one.
+- **A block rewritten from scratch is not a pair.** Its words no longer meet the
+  guard, so it reports as `removed` and `added` even though an editor would call
+  it the same block. The threshold cannot both accept a rewrite and reject an
+  unrelated block.
+- **Reordering is invisible.** Only equal positions are paired, so two replaced
+  blocks that swapped places are four children, not two `moved` ones.
+- **A guess is still a guess.** Two blocks of one bundle that happen to share
+  their words will be paired. `match: position` is the only warning the document
+  gives, and a client that must not act on a guess reads it.
+- **Access decides first.** A child the reader may not view leaves the tree
+  before the pairing runs, so it is never paired and never reported.
+
+**What to do:** keep the entity ids across drafts where you can. Load the
+existing paragraph and save a new revision of it rather than creating a
+replacement. Positional alignment is there for the flows where that is not
+possible, not as a substitute for them.
 
 ### A field's items are matched by position
 
