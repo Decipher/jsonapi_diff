@@ -42,6 +42,10 @@ changed without rendering Drupal's admin theme.
 - An optional `diff` discovery link on revisionable resource objects, through
   JSON:API Hypermedia, present only when the user could follow it. The route
   works without that module.
+- JSON:API sparse fieldsets on the diff type, so
+  `?fields[jsonapi_diff--diff]=summary` returns the counts alone. A fieldset
+  trims every diff in the document, the nested ones as well as the primary data,
+  and two fieldsets are cached separately.
 
 ### Known limitations
 
@@ -51,3 +55,5 @@ changed without rendering Drupal's admin theme.
   Diff joins its values into one string.
 - A reference field that recurses appears as `children` and has no entry of its
   own in `fields`.
+- A sparse fieldset trims a resource's members and not the tree, so there is no
+  way to keep `fields` and leave out the entries whose status is `same`.
