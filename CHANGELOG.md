@@ -33,6 +33,11 @@ changed without rendering Drupal's admin theme.
 - `attributes.fields`, keyed by JSON:API public field name, with each field's
   label, status, both values and plain line operations, beside an
   `attributes.summary` counting the entity's own fields by status.
+- `attributes.tree_summary`, the same four counts for the entity and every
+  entity below it. `summary` answers "did this entity change" and
+  `tree_summary` answers "did this entity or anything inside it change", which
+  on a page built from paragraphs is the question a comparison UI asks. An
+  entity dropped from the document for access reasons is counted in no rollup.
 - Access per side from core JSON:API's own decision for that revision, including
   content moderation's latest-version rule. Either side denied is a `403` for
   the whole diff, and the module adds no permission of its own.
@@ -43,7 +48,7 @@ changed without rendering Drupal's admin theme.
   JSON:API Hypermedia, present only when the user could follow it. The route
   works without that module.
 - JSON:API sparse fieldsets on the diff type, so
-  `?fields[jsonapi_diff--diff]=summary` returns the counts alone. A fieldset
+  `?fields[jsonapi_diff--diff]=tree_summary` returns the counts alone. A fieldset
   trims every diff in the document, the nested ones as well as the primary data,
   and two fieldsets are cached separately.
 
