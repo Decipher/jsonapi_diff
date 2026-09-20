@@ -779,6 +779,12 @@ position they hold in the reference field, and each such pair reports
   coefficient over the words of the fields the document reports for both of
   them. Below that, the two are left as an honest `removed` and `added`.
 
+The word guard needs words to weigh. Two blocks that hold no text of their own,
+which a container paragraph whose every field recurses does, cannot be judged on
+their content, so the delta and the bundle decide that pair alone. The blocks
+inside the container are then matched on their own merits, by these same two
+passes.
+
 A pair sits at one position on both sides, so its `status` is always `same`. What
 changed is inside it, in that child's own `fields` and `tree_summary`, exactly as
 for a block edited in place.
