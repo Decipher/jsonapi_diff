@@ -17,6 +17,7 @@ use Drupal\jsonapi\ResourceType\ResourceTypeRelationship;
 use Drupal\jsonapi_diff\Comparison\ChildDiff;
 use Drupal\jsonapi_diff\Comparison\EntityDiff;
 use Drupal\jsonapi_diff\Comparison\FieldDiff;
+use Drupal\jsonapi_diff\Comparison\ItemDiff;
 
 /**
  * The JSON:API resource object of one entity's diff.
@@ -107,6 +108,17 @@ final class DiffResourceObject extends ResourceObject {
         'left' => $field->left,
         'right' => $field->right,
         'ops' => $field->ops,
+        // A list, not a map keyed by delta. PHP has one array type, so a
+        // map would encode as a JSON array whenever the deltas happen to
+        // run from zero and as a JSON object whenever one is missing. A
+        // list always encodes as an array and each entry names its delta.
+        'items' => array_map(static fn (ItemDiff $item): array => [
+          'delta' => $item->delta,
+          'status' => $item->status,
+          'left' => $item->left,
+          'right' => $item->right,
+          'ops' => $item->ops,
+        ], $field->items),
       ], $diff->fields),
       'left' => $this->side('left', $entity_type, $diff->uuid, $diff->leftRevisionId, $left_version),
       'right' => $this->side('right', $entity_type, $diff->uuid, $diff->rightRevisionId, $right_version),
