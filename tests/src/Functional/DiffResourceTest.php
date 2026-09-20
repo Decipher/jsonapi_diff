@@ -137,6 +137,39 @@ class DiffResourceTest extends BrowserTestBase {
   }
 
   /**
+   * A draft that replaced its blocks reads as an edit over HTTP.
+   *
+   * The whole point of the positional pass, seen the way a client sees it.
+   * No block kept its id, and the document still reports one changed block
+   * rather than a replaced page. Each child says how it was matched, so a
+   * client can tell the inferred pairs from the exact ones.
+   */
+  public function testReplacedBlocksReadAsAnEdit(): void {
+    $before = $this->createBlock('first block');
+    $kept = $this->createBlock('second block');
+    $node = $this->createArticle(['field_blocks' => $this->references($before, $kept), 'uid' => $this->editor->id()]);
+    $this->reviseBlock($kept);
+    $after = $this->createBlock('first block, edited');
+    $node = $this->draft($node, ['field_blocks' => $this->references($after, $kept)]);
+    $this->drupalLogin($this->editor);
+
+    $document = $this->fetch($this->path($node));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $matches = [];
+    foreach ($document['data']['relationships']['children']['data'] as $identifier) {
+      $matches[substr($identifier['id'], 0, 36)] = $identifier['meta']['match'];
+    }
+    $this->assertCount(2, $matches);
+    $this->assertSame('position', $matches[$before->uuid()]);
+    $this->assertSame('id', $matches[$kept->uuid()]);
+    $tree_summary = $document['data']['attributes']['tree_summary'];
+    $this->assertSame(0, $tree_summary['added']);
+    $this->assertSame(0, $tree_summary['removed']);
+    $this->assertSame(1, $tree_summary['changed']);
+  }
+
+  /**
    * A sparse fieldset trims the members of every diff in the document.
    */
   public function testSparseFieldsetTrimsEveryDiff(): void {

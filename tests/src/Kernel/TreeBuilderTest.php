@@ -409,6 +409,276 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * A draft that replaced every block reports the one block it edited.
+   *
+   * The reported failure. A script rebuilt the paragraph field from
+   * scratch, so no block kept its id and the id pass matched nothing. The
+   * positional pass reads the blocks that hold their place as the same
+   * blocks, and the draft reads as one edit rather than a new page.
+   */
+  public function testReplacedBlocksPairByPosition(): void {
+    $before_bodies = ['first block', 'second block', 'third block'];
+    $after_bodies = ['first block', 'second block, edited', 'third block'];
+    [$left, $right, $before, $after] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(3, $diff->children);
+    $expected_statuses = [ChildDiff::SAME, ChildDiff::SAME, ChildDiff::SAME];
+    $this->assertSame($expected_statuses, $this->childStatuses($diff));
+    $expected_matches = [ChildDiff::MATCH_POSITION, ChildDiff::MATCH_POSITION, ChildDiff::MATCH_POSITION];
+    $this->assertSame($expected_matches, $this->childMatches($diff));
+
+    $edited = $this->childFor($diff, $before[1]);
+    $this->assertSame(1, $edited->leftDelta);
+    $this->assertSame(1, $edited->rightDelta);
+    $this->assertSame($after[1]->uuid(), $edited->diff->rightUuid);
+    $body = $edited->diff->fields['field_body'];
+    $this->assertSame(FieldDiff::CHANGED, $body->status);
+    $this->assertSame('second block', $body->left);
+    $this->assertSame('second block, edited', $body->right);
+
+    $this->assertSame(FieldDiff::SAME, $this->childFor($diff, $before[0])->diff->fields['field_body']->status);
+    $this->assertSame(FieldDiff::SAME, $this->childFor($diff, $before[2])->diff->fields['field_body']->status);
+    $this->assertSame(1, $diff->treeSummary['changed']);
+    $this->assertSame(0, $diff->treeSummary['added']);
+    $this->assertSame(0, $diff->treeSummary['removed']);
+    $this->assertSame($this->treeFieldCount($diff), array_sum($diff->treeSummary));
+  }
+
+  /**
+   * A swap of two blocks that kept their ids is still read by id.
+   *
+   * Both blocks hold a new position, so pairing by position would call
+   * each of them the other. The id pass runs first and takes them, and
+   * their own fields report nothing changed.
+   */
+  public function testIdMatchTakesPrecedenceOverPosition(): void {
+    $first = $this->createParagraph('block', ['field_body' => 'first block']);
+    $second = $this->createParagraph('block', ['field_body' => 'second block']);
+    $node = $this->createNode(['field_blocks' => $this->references($first, $second)]);
+    $this->reviseParagraph($first);
+    $this->reviseParagraph($second);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($second, $first)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $first_child = $this->childFor($diff, $first);
+    $this->assertSame(ChildDiff::MOVED, $first_child->status);
+    $this->assertSame(ChildDiff::MATCH_ID, $first_child->match);
+    $this->assertNull($first_child->diff->rightUuid);
+    $this->assertAllFields(FieldDiff::SAME, $first_child->diff);
+
+    $second_child = $this->childFor($diff, $second);
+    $this->assertSame(ChildDiff::MOVED, $second_child->status);
+    $this->assertSame(ChildDiff::MATCH_ID, $second_child->match);
+    $this->assertAllFields(FieldDiff::SAME, $second_child->diff);
+  }
+
+  /**
+   * Some blocks match by id and the ones left over match by position.
+   */
+  public function testIdAndPositionalMatchesInOneField(): void {
+    $kept = $this->createParagraph('block', ['field_body' => 'kept block']);
+    $replaced = $this->createParagraph('block', ['field_body' => 'replaced block']);
+    $node = $this->createNode(['field_blocks' => $this->references($kept, $replaced)]);
+    $this->reviseParagraph($kept, ['field_body' => 'kept block, edited']);
+    $replacement = $this->createParagraph('block', ['field_body' => 'replaced block, edited']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($kept, $replacement)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(2, $diff->children);
+    $kept_child = $this->childFor($diff, $kept);
+    $this->assertSame(ChildDiff::SAME, $kept_child->status);
+    $this->assertSame(ChildDiff::MATCH_ID, $kept_child->match);
+    $this->assertSame(FieldDiff::CHANGED, $kept_child->diff->fields['field_body']->status);
+
+    $replaced_child = $this->childFor($diff, $replaced);
+    $this->assertSame(ChildDiff::SAME, $replaced_child->status);
+    $this->assertSame(ChildDiff::MATCH_POSITION, $replaced_child->match);
+    $this->assertSame(1, $replaced_child->leftDelta);
+    $this->assertSame(1, $replaced_child->rightDelta);
+    $this->assertSame($replacement->uuid(), $replaced_child->diff->rightUuid);
+    $this->assertSame(FieldDiff::CHANGED, $replaced_child->diff->fields['field_body']->status);
+    $this->assertSame(2, $diff->treeSummary['changed']);
+  }
+
+  /**
+   * A block the draft really added sits beside the replaced ones.
+   */
+  public function testAddedBlockBesideReplacedBlocks(): void {
+    $before_bodies = ['first block', 'second block'];
+    $after_bodies = ['first block', 'second block', 'third block'];
+    [$left, $right, $before, $after] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(3, $diff->children);
+    $this->assertSame(ChildDiff::MATCH_POSITION, $this->childFor($diff, $before[0])->match);
+    $this->assertSame(ChildDiff::MATCH_POSITION, $this->childFor($diff, $before[1])->match);
+
+    $added = $this->childFor($diff, $after[2]);
+    $this->assertSame(ChildDiff::ADDED, $added->status);
+    $this->assertSame(ChildDiff::MATCH_NONE, $added->match);
+    $this->assertNull($added->leftDelta);
+    $this->assertSame(2, $added->rightDelta);
+    $this->assertAllFields(FieldDiff::ADDED, $added->diff);
+  }
+
+  /**
+   * A block the draft really removed sits beside the replaced ones.
+   */
+  public function testRemovedBlockBesideReplacedBlocks(): void {
+    $before_bodies = ['first block', 'second block', 'third block'];
+    $after_bodies = ['first block', 'second block'];
+    [$left, $right, $before] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(3, $diff->children);
+    $this->assertSame(ChildDiff::MATCH_POSITION, $this->childFor($diff, $before[0])->match);
+    $this->assertSame(ChildDiff::MATCH_POSITION, $this->childFor($diff, $before[1])->match);
+
+    $removed = $this->childFor($diff, $before[2]);
+    $this->assertSame(ChildDiff::REMOVED, $removed->status);
+    $this->assertSame(ChildDiff::MATCH_NONE, $removed->match);
+    $this->assertSame(2, $removed->leftDelta);
+    $this->assertNull($removed->rightDelta);
+    $this->assertAllFields(FieldDiff::REMOVED, $removed->diff);
+  }
+
+  /**
+   * Two bundles at one position are never paired.
+   *
+   * The bundles decide what a block is. Two of them are different things,
+   * whatever they hold, so the position alone does not make them a pair.
+   */
+  public function testDifferentBundlesAtOnePositionAreNotPaired(): void {
+    $block = $this->createParagraph('block', ['field_body' => 'first block']);
+    $node = $this->createNode(['field_blocks' => $this->references($block)]);
+    $group = $this->createParagraph('group', ['field_items' => []]);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($group)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(2, $diff->children);
+    $removed = $this->childFor($diff, $block);
+    $this->assertSame(ChildDiff::REMOVED, $removed->status);
+    $this->assertSame(ChildDiff::MATCH_NONE, $removed->match);
+    $added = $this->childFor($diff, $group);
+    $this->assertSame(ChildDiff::ADDED, $added->status);
+    $this->assertSame(ChildDiff::MATCH_NONE, $added->match);
+  }
+
+  /**
+   * Unrelated text at one position is left as a removal and an addition.
+   */
+  public function testUnrelatedContentAtOnePositionIsNotPaired(): void {
+    $before_bodies = ['our history began in 1902'];
+    $after_bodies = ['contact us using the form below'];
+    [$left, $right, $before, $after] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(2, $diff->children);
+    $this->assertSame(ChildDiff::REMOVED, $this->childFor($diff, $before[0])->status);
+    $this->assertSame(ChildDiff::MATCH_NONE, $this->childFor($diff, $before[0])->match);
+    $this->assertSame(ChildDiff::ADDED, $this->childFor($diff, $after[0])->status);
+    $this->assertSame(ChildDiff::MATCH_NONE, $this->childFor($diff, $after[0])->match);
+  }
+
+  /**
+   * Two texts that share half their words are paired.
+   *
+   * The guard is a Dice coefficient over the words of both sides, and it
+   * pairs at 0.5. One word shared out of two on each side is exactly
+   * that, so this is the weakest pair the guard accepts.
+   */
+  public function testContentGuardPairsAtItsThreshold(): void {
+    $before_bodies = ['alpha beta'];
+    $after_bodies = ['alpha gamma'];
+    [$left, $right, $before] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(1, $diff->children);
+    $child = $this->childFor($diff, $before[0]);
+    $this->assertSame(ChildDiff::MATCH_POSITION, $child->match);
+    $this->assertSame(FieldDiff::CHANGED, $child->diff->fields['field_body']->status);
+  }
+
+  /**
+   * Two texts that share less than half their words are not paired.
+   *
+   * One word shared out of three on each side scores a third, under the
+   * threshold. The two are reported as a removal and an addition, which
+   * is what the content supports.
+   */
+  public function testContentGuardRefusesBelowItsThreshold(): void {
+    $before_bodies = ['alpha beta gamma'];
+    $after_bodies = ['alpha delta epsilon'];
+    [$left, $right, $before, $after] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(2, $diff->children);
+    $this->assertSame(ChildDiff::REMOVED, $this->childFor($diff, $before[0])->status);
+    $this->assertSame(ChildDiff::ADDED, $this->childFor($diff, $after[0])->status);
+  }
+
+  /**
+   * A child the user may not view is neither paired nor exposed.
+   *
+   * The left side holds a paragraph the reader may not view. The right
+   * side holds a new paragraph of the same bundle at the same position,
+   * whose words would pass the guard. The denied paragraph leaves the
+   * tree before the positional pass runs, so nothing is paired with it
+   * and the new paragraph is reported as added.
+   */
+  public function testDeniedChildIsNeitherPairedNorExposed(): void {
+    $denied = $this->createParagraph('block', ['field_body' => 'shared words plus lantern', 'status' => 0]);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($denied)]);
+    $replacement = $this->createParagraph('block', ['field_body' => 'shared words plus beacon']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($replacement)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(1, $diff->children);
+    $added = $this->childFor($diff, $replacement);
+    $this->assertSame(ChildDiff::ADDED, $added->status);
+    $this->assertSame(ChildDiff::MATCH_NONE, $added->match);
+    $this->assertNull($added->leftDelta);
+    $this->assertNull($added->diff->leftRevisionId);
+    $this->assertNotContains($denied->uuid(), $this->uuids($diff));
+    $this->assertStringNotContainsString('lantern', $this->values($diff));
+  }
+
+  /**
+   * A replacement the user may not view is not paired either.
+   *
+   * The denial is on the right side this time. The block the reader may
+   * view is reported as removed, and no value of the denied one reaches
+   * the document through the pair.
+   */
+  public function testDeniedReplacementIsNeitherPairedNorExposed(): void {
+    $shown = $this->createParagraph('block', ['field_body' => 'shared words plus beacon']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($shown)]);
+    $denied = $this->createParagraph('block', ['field_body' => 'shared words plus lantern', 'status' => 0]);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($denied)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(1, $diff->children);
+    $removed = $this->childFor($diff, $shown);
+    $this->assertSame(ChildDiff::REMOVED, $removed->status);
+    $this->assertSame(ChildDiff::MATCH_NONE, $removed->match);
+    $this->assertNull($removed->rightDelta);
+    $this->assertNotContains($denied->uuid(), $this->uuids($diff));
+    $this->assertStringNotContainsString('lantern', $this->values($diff));
+  }
+
+  /**
    * A paragraph inside a paragraph is a child of a child.
    */
   public function testNestedParagraph(): void {
@@ -856,6 +1126,65 @@ class TreeBuilderTest extends KernelTestBase {
       static fn (array $item): int => (int) $item['target_revision_id'],
       $revision->get('field_blocks')->getValue(),
     ));
+  }
+
+  /**
+   * Creates a node whose draft replaced every block with a new entity.
+   *
+   * No block keeps its id, which is what a script that rebuilds the field
+   * from scratch does. The bodies say what each side holds.
+   *
+   * @param list<string> $before_bodies
+   *   The body of each block the published revision holds.
+   * @param list<string> $after_bodies
+   *   The body of each block the draft holds.
+   *
+   * @return array{\Drupal\node\NodeInterface, \Drupal\node\NodeInterface, list<\Drupal\paragraphs\ParagraphInterface>, list<\Drupal\paragraphs\ParagraphInterface>}
+   *   The two revisions, then the blocks of each side in delta order.
+   */
+  protected function replaceBlocks(array $before_bodies, array $after_bodies): array {
+    $before = [];
+    foreach ($before_bodies as $body) {
+      $before[] = $this->createParagraph('block', ['field_body' => $body]);
+    }
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references(...$before)]);
+    $after = [];
+    foreach ($after_bodies as $body) {
+      $after[] = $this->createParagraph('block', ['field_body' => $body]);
+    }
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references(...$after)]);
+    return [$left, $right, $before, $after];
+  }
+
+  /**
+   * Lists the status of each child of a diff, in order.
+   *
+   * @return list<string>
+   *   The statuses.
+   */
+  protected function childStatuses(EntityDiff $diff): array {
+    return array_map(static fn (ChildDiff $child): string => $child->status, $diff->children);
+  }
+
+  /**
+   * Lists how each child of a diff was matched, in order.
+   *
+   * @return list<string>
+   *   The match values.
+   */
+  protected function childMatches(EntityDiff $diff): array {
+    return array_map(static fn (ChildDiff $child): string => $child->match, $diff->children);
+  }
+
+  /**
+   * Counts the fields of a diff and of every diff below it.
+   */
+  protected function treeFieldCount(EntityDiff $diff): int {
+    $count = count($diff->fields);
+    foreach ($diff->children as $child) {
+      $count += $this->treeFieldCount($child->diff);
+    }
+    return $count;
   }
 
   /**
