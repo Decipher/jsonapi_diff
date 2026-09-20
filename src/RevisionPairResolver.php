@@ -10,11 +10,9 @@ use Drupal\Core\Http\Exception\CacheableAccessDeniedHttpException;
 use Drupal\Core\Http\Exception\CacheableBadRequestHttpException;
 use Drupal\Core\Http\Exception\CacheableNotFoundHttpException;
 use Drupal\Core\Session\AccountInterface;
-use Drupal\jsonapi\Access\EntityAccessChecker;
-use Drupal\jsonapi\JsonApiResource\LabelOnlyResourceObject;
-use Drupal\jsonapi\JsonApiResource\ResourceObject;
 use Drupal\jsonapi\Revisions\ResourceVersionRouteEnhancer;
 use Drupal\jsonapi\Revisions\VersionNegotiator;
+use Drupal\jsonapi_diff\Access\EntityViewCheck;
 
 /**
  * Resolves the two versions a diff compares.
@@ -37,7 +35,7 @@ final readonly class RevisionPairResolver {
 
   public function __construct(
     private VersionNegotiator $versionNegotiator,
-    private EntityAccessChecker $entityAccessChecker,
+    private EntityViewCheck $entityViewCheck,
   ) {}
 
   /**
@@ -82,8 +80,8 @@ final readonly class RevisionPairResolver {
     // Both sides are checked before either is judged, so a denial carries
     // the cacheability of both decisions.
     $denied = array_filter([
-      'left' => !$this->isViewable($left_revision, $account, $cacheability),
-      'right' => !$this->isViewable($right_revision, $account, $cacheability),
+      'left' => !$this->entityViewCheck->isViewable($left_revision, $account, $cacheability),
+      'right' => !$this->entityViewCheck->isViewable($right_revision, $account, $cacheability),
     ]);
     if ($denied) {
       $message = sprintf('The current user is not allowed to view the %s version of the requested resource.', implode(' and ', array_keys($denied)));
@@ -120,19 +118,6 @@ final readonly class RevisionPairResolver {
 
     assert($revision instanceof ContentEntityInterface);
     return $revision;
-  }
-
-  /**
-   * Asks core JSON:API whether the account may view a revision.
-   *
-   * A label-only result counts as a denial. A diff of a label-only view
-   * would expose the fields the label hides. The result's cacheability is
-   * collected either way.
-   */
-  private function isViewable(ContentEntityInterface $revision, ?AccountInterface $account, CacheableMetadata $cacheability): bool {
-    $result = $this->entityAccessChecker->getAccessCheckedResourceObject($revision, $account);
-    $cacheability->addCacheableDependency($result);
-    return $result instanceof ResourceObject && !$result instanceof LabelOnlyResourceObject;
   }
 
   /**

@@ -55,6 +55,7 @@ class DiffResourceTest extends KernelTestBase {
     'jsonapi_resources',
     'diff',
     'jsonapi_diff',
+    'jsonapi_diff_test',
   ];
 
   /**
@@ -218,6 +219,34 @@ class DiffResourceTest extends KernelTestBase {
     $this->assertNull($gone['relationships']['right']['data']);
     $this->assertSame($removed->uuid() . ':' . $this->blockRevisions($this->loadNodeRevision(1))[(int) $removed->id()] . ':', $gone['id']);
     $this->assertSame('removed', $gone['attributes']['fields']['field_body']['status']);
+  }
+
+  /**
+   * A child the user may not view is nowhere in the encoded document.
+   *
+   * The raw body is read, not the decoded document, so a value that leaked
+   * through any other member fails the test too.
+   */
+  public function testDeniedChildIsAbsentFromTheDocument(): void {
+    $shown = $this->createBlock('shown body');
+    $denied = $this->createUnpublishedBlock('denied body');
+    $node = $this->createArticle(['field_blocks' => $this->references($shown, $denied), 'uid' => $this->editor->id()]);
+    $this->reviseBlock($shown, 'shown body, edited');
+    $this->reviseBlock($denied, 'denied body, edited');
+    $node = $this->draft($node, ['field_blocks' => $this->references($shown, $denied)]);
+    $this->assertFalse($denied->access('view', $this->editor));
+    $this->assertTrue($shown->access('view', $this->editor));
+
+    $body = (string) $this->respond($node, [])->getContent();
+
+    $this->assertStringNotContainsString('denied body', $body);
+    $this->assertStringNotContainsString((string) $denied->uuid(), $body);
+    $document = json_decode($body, TRUE);
+    $this->assertIsArray($document);
+    $this->assertCount(1, $document['included']);
+    $this->assertCount(1, $document['data']['relationships']['children']['data']);
+    $this->assertStringStartsWith($shown->uuid() . ':', $document['data']['relationships']['children']['data'][0]['id']);
+    $this->assertSame('shown body, edited', $this->includedFor($document, $shown)['attributes']['fields']['field_body']['right']);
   }
 
   /**

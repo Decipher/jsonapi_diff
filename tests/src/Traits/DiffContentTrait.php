@@ -200,6 +200,20 @@ trait DiffContentTrait {
   }
 
   /**
+   * Creates and saves an unpublished block paragraph with a body.
+   *
+   * Paragraphs denies view access to an unpublished paragraph unless the
+   * site opts in and the user holds the permission. It is the plainest way
+   * to put an entity a reader may not see inside one they may.
+   */
+  protected function createUnpublishedBlock(string $body): ParagraphInterface {
+    $paragraph = Paragraph::create(['type' => 'block', 'field_body' => $body]);
+    $paragraph->setUnpublished();
+    $paragraph->save();
+    return $paragraph;
+  }
+
+  /**
    * Saves a new revision of a paragraph, as the node form does on each save.
    */
   protected function reviseBlock(ParagraphInterface $paragraph, ?string $body = NULL): ParagraphInterface {

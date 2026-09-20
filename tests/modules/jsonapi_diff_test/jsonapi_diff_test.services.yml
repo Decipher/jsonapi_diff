@@ -1,4 +1,9 @@
 services:
+  # Core keeps the access checker private, so a test that asks it what it
+  # answers for one entity needs a public alias.
+  jsonapi_diff_test.entity_access_checker:
+    alias: jsonapi.entity_access_checker
+    public: true
   jsonapi_diff_test.resource_type_build_subscriber:
     class: Drupal\jsonapi_diff_test\EventSubscriber\ResourceTypeBuildSubscriber
     tags:
