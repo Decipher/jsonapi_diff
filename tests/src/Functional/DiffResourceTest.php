@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\jsonapi_diff\Functional;
 
 use Drupal\Core\Session\AnonymousUserSession;
+use Drupal\jsonapi_diff\JsonApiResource\DiffResourceObject;
 use Drupal\language\Entity\ConfigurableLanguage;
 use Drupal\node\NodeInterface;
 use Drupal\Tests\BrowserTestBase;
@@ -335,6 +336,29 @@ class DiffResourceTest extends BrowserTestBase {
   }
 
   /**
+   * Two sparse fieldsets are cached separately.
+   */
+  public function testFieldsetsAreCachedSeparately(): void {
+    $node = $this->revise($this->createArticle(['field_text' => 'one', 'uid' => $this->editor->id()]), ['field_text' => 'two']);
+    $this->drupalLogin($this->publisher);
+    $query = ['leftVersion' => 'id:1', 'rightVersion' => 'id:2'];
+
+    $summary = $this->fetch($this->path($node), $query + $this->fieldset('summary'));
+    $this->assertSession()->responseHeaderEquals('X-Drupal-Dynamic-Cache', 'MISS');
+    $this->assertArrayHasKey('summary', $summary['data']['attributes']);
+    $this->assertArrayNotHasKey('fields', $summary['data']['attributes']);
+
+    $fields = $this->fetch($this->path($node), $query + $this->fieldset('fields'));
+    $this->assertSession()->responseHeaderEquals('X-Drupal-Dynamic-Cache', 'MISS');
+    $this->assertArrayHasKey('fields', $fields['data']['attributes']);
+    $this->assertArrayNotHasKey('summary', $fields['data']['attributes']);
+
+    $repeat = $this->fetch($this->path($node), $query + $this->fieldset('summary'));
+    $this->assertSession()->responseHeaderEquals('X-Drupal-Dynamic-Cache', 'HIT');
+    $this->assertSame($summary, $repeat);
+  }
+
+  /**
    * Behind a language prefix both sides are compared in that language.
    */
   public function testTranslatedPair(): void {
@@ -368,6 +392,19 @@ class DiffResourceTest extends BrowserTestBase {
    */
   protected function path(NodeInterface $node): string {
     return "/jsonapi/diff/node/{$node->bundle()}/{$node->uuid()}";
+  }
+
+  /**
+   * Builds the query parameter of a sparse fieldset on the diff type.
+   *
+   * @param string $members
+   *   The member names, comma separated.
+   *
+   * @return array<string, array<string, string>>
+   *   The query parameter.
+   */
+  protected function fieldset(string $members): array {
+    return ['fields' => [DiffResourceObject::TYPE_NAME => $members]];
   }
 
   /**

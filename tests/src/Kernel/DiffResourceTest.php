@@ -274,9 +274,19 @@ class DiffResourceTest extends KernelTestBase {
     $this->assertInstanceOf(CacheableResponseInterface::class, $response);
     $metadata = $response->getCacheableMetadata();
 
-    foreach (['url.query_args:leftVersion', 'url.query_args:rightVersion', 'user.permissions', 'languages:language_content'] as $context) {
+    $expected = [
+      'url.query_args:leftVersion',
+      'url.query_args:rightVersion',
+      'url.query_args:fields',
+      'user.permissions',
+      'languages:language_content',
+    ];
+    foreach ($expected as $context) {
       $this->assertContains($context, $metadata->getCacheContexts());
     }
+    // The document is the whole tree whatever `include` asks for, so the
+    // response does not vary by it.
+    $this->assertNotContains('url.query_args:include', $metadata->getCacheContexts());
     $this->assertContains('node:' . $node->id(), $metadata->getCacheTags());
     foreach ($blocks as $block) {
       $this->assertContains('paragraph:' . $block->id(), $metadata->getCacheTags());
