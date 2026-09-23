@@ -32,7 +32,9 @@ class DiffLinkProviderTest extends DiffLinkProviderTestBase {
     $individual = $this->fetch($this->individualPath());
     $this->assertSession()->statusCodeEquals(200);
     $links = $individual['data']['links'];
-    $this->assertArrayHasKey('working-copy', $links);
+    // `self` is on every resource object in every supported core version, so
+    // it proves the links were read without depending on a version link.
+    $this->assertArrayHasKey('self', $links);
     $this->assertArrayHasKey('diff', $links);
     $this->assertSame($expected, $links['diff']['href']);
 
@@ -89,7 +91,9 @@ class DiffLinkProviderTest extends DiffLinkProviderTestBase {
     $document = $this->fetch($this->individualPath($this->drafted));
 
     $this->assertSession()->statusCodeEquals(200);
-    $this->assertArrayHasKey('working-copy', $document['data']['links']);
+    // The `self` link proves the links were read, so the absent `diff` below
+    // is a real absence rather than an empty member.
+    $this->assertArrayHasKey('self', $document['data']['links']);
     $this->assertArrayNotHasKey('diff', $document['data']['links']);
 
     $this->fetch($this->diffPath($this->drafted));
