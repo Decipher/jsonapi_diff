@@ -26,7 +26,9 @@ class DiffWithoutHypermediaTest extends DiffLinkProviderTestBase {
 
     $individual = $this->fetch($this->individualPath());
     $this->assertSession()->statusCodeEquals(200);
-    $this->assertArrayHasKey('working-copy', $individual['data']['links']);
+    // The `self` link proves the links were read, so the absent `diff` below
+    // is a real absence rather than an empty member.
+    $this->assertArrayHasKey('self', $individual['data']['links']);
     $this->assertArrayNotHasKey('diff', $individual['data']['links']);
 
     $diff = $this->fetch($this->diffPath());
