@@ -7,11 +7,12 @@
 Exposes the difference between two revisions of an entity as a JSON:API
 document.
 
-Core JSON:API already serves any revision of an entity, so a decoupled editor
-can switch a page between its published version and a draft. What it cannot say
-is what changed. The Diff module works that out, field by field and down through
-paragraphs, but renders the answer as admin-theme HTML. This module puts the
-same comparison on a JSON:API route, as data a frontend can render itself.
+Core JSON:API serves any revision of an entity, so a decoupled editor can switch
+a page between its published version and a draft. It cannot say what changed.
+The [Diff](https://www.drupal.org/project/diff) module works that out, field by
+field and down through paragraphs, and renders it as admin-theme HTML. This
+module puts the same comparison on a JSON:API route, as data a frontend renders
+itself.
 
 For a full description of the module, visit the
 [project page](https://www.drupal.org/project/jsonapi_diff).
@@ -28,9 +29,7 @@ Submit bug reports and feature suggestions, or track changes in the
 - The endpoint
 - The document
 - Access
-- Discovery
 - Limitations
-- For module maintainers
 - FAQ
 - Maintainers
 
@@ -44,15 +43,14 @@ Submit bug reports and feature suggestions, or track changes in the
 
 ## Recommended modules
 
-[JSON:API Hypermedia](https://www.drupal.org/project/jsonapi_hypermedia) adds
-the discovery link described under Discovery. It is optional, and the route
-works without it.
+[JSON:API Hypermedia](https://www.drupal.org/project/jsonapi_hypermedia) adds a
+`diff` link to every revisionable resource object, so a client follows a link
+instead of building the URL. The route works without it.
 
-On PHP 8.4, its only release (8.x-1.10) declares an implicitly nullable
-parameter that Drupal's test error handler turns into a thrown exception. A
-running site is unaffected, because a deprecation is only a notice, but a module
-whose tests exercise a link provider needs the dev branch or the patch from
-<https://www.drupal.org/i/3526924>. This module's development build carries it.
+On PHP 8.4 its 8.x-1.10 release triggers a deprecation that Drupal's test error
+handler turns into an exception. A running site is unaffected. Use the dev branch
+or the patch from [#3526924](https://www.drupal.org/i/3526924) if your own tests
+exercise a link provider.
 
 ## Installation
 
@@ -68,36 +66,12 @@ for the standard instructions.
 
 ## Configuration
 
-This module has no configuration of its own. What is compared, and how, is
-Diff's configuration at `/admin/config/content/diff/fields`. What is exposed is
-JSON:API's resource type configuration. There is no third place to look, which
-is the point.
+None. Diff's field settings at `/admin/config/content/diff/fields` decide what is
+compared and how. JSON:API's resource type settings decide what is exposed. This
+module reads both and adds nothing of its own.
 
-One Diff default surprises most people once. A field is compared when Diff has a
-builder plugin for it and that plugin is not hidden. Absent an explicit setting,
-Diff decides by asking whether the field appears in **any** of the entity type's
-view displays. **A field hidden from every view display is never compared**, and
-it is absent from `fields` rather than reported as `same`.
-
-That is easy to hit on a decoupled site, where view displays are often left
-empty because nothing renders them. Either put the field in a view display, or
-give it an explicit plugin in Diff's field settings. The second is the better
-answer for a decoupled site, because it states the intent instead of relying on
-a side effect.
-
-Diff never compares an entity type's bundle field, its revision field,
-`revision_log` or `revision_uid`, and never compares a field that is not
-revisionable.
-
-A field drops out of the document for one of these reasons:
-
-| Cause | Where to fix it |
-| --- | --- |
-| The field is not revisionable | Nothing to fix. There is no second value to compare |
-| Diff has no plugin for it, or it is set to hidden | Diff's field settings |
-| It is in no view display and has no explicit Diff plugin | A view display, or Diff's field settings |
-| JSON:API does not expose it on that resource type | JSON:API Extras field settings, if that module is installed |
-| The user may not view it | The role's permissions |
+If a field is missing from a diff, it is one of those two that left it out. See
+the FAQ.
 
 ## The endpoint
 
@@ -107,70 +81,48 @@ One route, read-only:
 GET /jsonapi/diff/{entity_type}/{bundle}/{uuid}
 ```
 
-Drupal's vocabulary for this is unavoidable, so in short:
-
-| Term | Means |
-| --- | --- |
-| Revision | One saved state of an entity. Saving again adds a revision rather than overwriting the last |
-| Default revision | The revision Drupal serves when nobody asks for a particular one. On a plain site that is the published one |
-| Working copy | The newest revision of all, published or not. A draft saved over a published page is the working copy while the published revision stays the default |
-
-A query parameter names each side. Each holds a core JSON:API resource version
-identifier, the same grammar `resourceVersion` takes on the individual route,
-resolved by the same negotiator.
+A query parameter names each side, in core JSON:API's resource version grammar
+and resolved by core's negotiator.
 
 | Parameter | Default | Accepts |
 | --- | --- | --- |
 | `leftVersion` | `rel:latest-version` | `id:<revision id>`, `rel:latest-version`, `rel:working-copy` |
 | `rightVersion` | `rel:working-copy` | The same three forms |
 
-So the bare URL, with no query parameters, compares the published revision
-against the working copy. An explicit pair is two identifiers:
+`rel:latest-version` is the newest default revision, which on an ordinary site is
+the published one. `rel:working-copy` is the newest revision of all. So the bare
+URL compares the published page against its draft:
 
 ```bash
 curl -H 'Accept: application/vnd.api+json' \
   'https://example.com/jsonapi/diff/node/article/85924444-4579-493c-8658-e654df08ff08?leftVersion=id:12&rightVersion=id:15'
 ```
 
-Nothing forces `left` to be the older side, but the defaults and the names read
-that way: `left` is where the content came from and `right` is where it went, so
-a `+` in `ops` is an addition on the right.
+`left` is where the content came from and `right` is where it went, so a `+` in
+`ops` is an addition on the right. Comparing a revision with itself is allowed,
+and every field comes back `same`. The comparison uses the current content
+language, the same as core JSON:API, one language per request.
 
-A revision id for the `id:` form comes from `attributes.drupal_internal__vid` on
-a node fetched from core's individual route, or from
-`drupal_internal__revision_id` in the `meta` of this document's own `left` and
-`right` relationships. Nothing here lists an entity's revisions, and core
-JSON:API does not expose a route for that either.
+The parameter names include a capital letter because core rejects an
+all-lowercase custom query parameter on every JSON:API route, and core's own
+parameter is `resourceVersion` for the same reason. Inside the document the
+members are `left` and `right`.
 
-Error statuses match what core JSON:API gives for the same request on its own
-individual route.
+Error statuses match core JSON:API on its own individual route.
 
 | Situation | Status |
 | --- | --- |
 | An identifier outside the grammar, such as `leftVersion=12` | `400` |
-| A revision id that exists but belongs to another entity | `404` |
-| An unknown UUID, a UUID of another bundle, or an entity type that does not keep revisions | `404` |
+| An all-lowercase parameter name, such as `left=id:12` | `400` |
+| A revision id belonging to another entity | `404` |
+| An unknown UUID, a UUID of another bundle, or an entity type without revisions | `404` |
 | Either side denied | `403` |
-
-Comparing a revision with itself is allowed. Every field comes back `same`.
-
-### The capital letter in `leftVersion`
-
-Core validates query parameter names on every JSON:API route, this one included,
-and requires a custom name to hold at least one character outside `a-z`.
-All-lowercase names are reserved for the specification itself. So `?left=` and
-`?right=` are refused with a `400` before the route even runs, which is the same
-reason core's own parameter is `resourceVersion` and not `version`.
-
-Member names inside the document have no such rule, and they are `left` and
-`right`. The two spellings are deliberate: `leftVersion` in the query, `left` in
-the document.
 
 ## The document
 
 Primary data is the diff of the addressed entity. Every entity the comparison
-recursed into gets its own resource of the same type in `included`, to any
-depth, so one request returns the whole tree.
+recursed into gets a resource of the same type in `included`, to any depth, so
+one request returns the whole tree.
 
 | Member | Holds |
 | --- | --- |
@@ -183,506 +135,132 @@ depth, so one request returns the whole tree.
 | `relationships.right` | The compared entity at the right version |
 | `relationships.children` | The diffs of the entities this one recursed into |
 
-The `id` is built from revision ids rather than from the identifiers the client
-sent, so `?leftVersion=rel:latest-version` and `?leftVersion=id:1` produce the
-same `id` when they resolve to the same revision. A side the entity is absent
-from leaves its segment empty, as in `f1bc6380-bb56-4f1b-9c73-b8e3416e75b3::11`.
+Each side's identifier holds the resolved version and revision id in `meta`, and
+its `links.related` is the individual JSON:API URL of that version. The `id` uses
+revision ids rather than the identifiers the client sent, so two requests
+resolving to the same pair share an `id`, and a side the entity is absent from
+leaves its segment empty.
 
-A small response in full: one changed field on the node, one child that has no
-fields of its own, and nothing else. The counts describe exactly what is shown,
-so they can be checked against the rules below.
-
-```json
-{
-  "data": {
-    "type": "jsonapi_diff--diff",
-    "id": "85924444-4579-493c-8658-e654df08ff08:1:2",
-    "attributes": {
-      "summary": { "added": 0, "removed": 0, "changed": 1, "same": 0 },
-      "tree_summary": { "added": 0, "removed": 0, "changed": 1, "same": 0 },
-      "fields": {
-        "title": {
-          "label": "Title",
-          "status": "changed",
-          "left": "Autumn in the alpine parks",
-          "right": "Autumn in the alpine national parks",
-          "ops": [
-            { "type": "-", "lines": ["Autumn in the alpine parks"] },
-            { "type": "+", "lines": ["Autumn in the alpine national parks"] }
-          ],
-          "items": [
-            {
-              "delta": 0,
-              "status": "changed",
-              "left": "Autumn in the alpine parks",
-              "right": "Autumn in the alpine national parks",
-              "ops": [
-                { "type": "-", "lines": ["Autumn in the alpine parks"] },
-                { "type": "+", "lines": ["Autumn in the alpine national parks"] }
-              ]
-            }
-          ]
-        }
-      }
-    },
-    "relationships": {
-      "left": {
-        "data": {
-          "type": "node--article",
-          "id": "85924444-4579-493c-8658-e654df08ff08",
-          "meta": {
-            "resourceVersion": "rel:latest-version",
-            "drupal_internal__revision_id": 1
-          }
-        },
-        "links": {
-          "related": {
-            "href": "https://example.com/jsonapi/node/article/85924444-4579-493c-8658-e654df08ff08?resourceVersion=rel%3Alatest-version"
-          }
-        }
-      },
-      "children": {
-        "data": [
-          {
-            "type": "jsonapi_diff--diff",
-            "id": "342736e4-7a34-4460-b72c-9b861a432dc8:1:8",
-            "meta": {
-              "field": "field_blocks",
-              "left_delta": 0,
-              "right_delta": 0,
-              "status": "same",
-              "match": "id"
-            }
-          }
-        ]
-      }
-    }
-  },
-  "included": [
-    {
-      "type": "jsonapi_diff--diff",
-      "id": "342736e4-7a34-4460-b72c-9b861a432dc8:1:8",
-      "links": {
-        "self": {
-          "href": "https://example.com/jsonapi/diff/paragraph/block/342736e4-7a34-4460-b72c-9b861a432dc8?leftVersion=id%3A1&rightVersion=id%3A8"
-        }
-      },
-      "attributes": {
-        "summary": { "added": 0, "removed": 0, "changed": 0, "same": 0 },
-        "tree_summary": { "added": 0, "removed": 0, "changed": 0, "same": 0 },
-        "fields": {}
-      }
-    }
-  ]
-}
-```
-
-`right` has the same shape as `left`, and is left out above only to keep the
-example short. An entity with nothing of its own to report has `"fields": {}`, an
-empty JSON object rather than an empty array, which is why the child's counts are
-all zero. A response whose comparison recursed into nothing carries no `included`
-member at all, so treat it as optional rather than expecting an empty array.
-
-### Left and right
-
-`left` and `right` each carry one resource identifier of the compared entity,
-not of a diff. They usually point at the same entity, because both sides are
-revisions of it. The revision is in the identifier's `meta`: `resourceVersion`
-repeats the identifier for that side, and `drupal_internal__revision_id` gives
-the revision it resolved to. `links.related` is the individual JSON:API URL of
-that version, so following it fetches the whole revision from core's own route.
-
-Both versions cannot appear in `included`. A JSON:API compound document holds
-each type and id pair once, and the two versions share both. The `related` links
-are the honest route to the full data.
-
-On a child that only one side has, the absent side is `"data": null` with no
-links. On a child whose `meta.match` is `position`, the two identifiers name two
-different entities, and that resource carries no `self` link: the route compares
-revisions of one entity and has no URL that restates a pair of two.
-
-### The children
-
-`children` lists the diffs of the entities the comparison recursed into. Each
-identifier's `meta` says where that child sat:
-
-| Key | Holds |
-| --- | --- |
-| `field` | The public name of the reference field it was found on |
-| `left_delta` | Its position on the left, or `null` when the left side lacks it |
-| `right_delta` | Its position on the right, or `null` when the right side lacks it |
-| `status` | `same`, `moved`, `added` or `removed` |
-| `match` | `id`, `position` or `none`, how the two sides were brought together |
-
-`status` is about the reference, not the content. `moved` is the same entity at a
-different position, and its own fields are still reported on their own merits, so
-a block that was only reordered is `moved` with every field `same`.
-
-`match` says how much to trust the pair. `id` is the same entity on both sides
-and is exact. `position` is two different entities paired because they hold the
-same place in the same field, and it is a guess: see the limitation below for
-what guards it. `none` is a child only one side has, and always sits beside
-`added` or `removed`. A client that will not act on a guess filters on
-`match === 'id'`.
-
-Recursion follows Diff's own rule. A reference field is walked when its Diff
-builder plugin offers up the referenced entities. In practice that means
-`entity_reference_revisions` fields, so paragraphs recurse. Plain
-`entity_reference` fields do not, and a term or a media item is compared as its
-label on the parent instead.
-
-### The fields
-
-`attributes.fields` is keyed by the JSON:API public field name, so an aliased
-field is keyed by its alias and a disabled field is absent. The order is Diff's,
-not the resource type's.
+### Each field entry
 
 | Key | Holds |
 | --- | --- |
 | `label` | The field's human label |
 | `status` | `added`, `removed`, `changed` or `same` |
-| `left` | The left value as one string |
-| `right` | The right value as one string |
-| `ops` | Line operations from `left` to `right` |
-| `items` | The same four keys again, per item of the field, each with its `delta` |
+| `left`, `right` | That side's value as one string |
+| `ops` | Line operations, each `{type, lines}` where `type` is `=`, `-` or `+` |
+| `items` | The same keys again per item of the field, each with its `delta` |
 
-Each entry in `ops` is `{"type": ..., "lines": [...]}`, where `type` is `=` for
-carried lines, `-` for removed and `+` for added, and `lines` holds them in
-order. A changed line arrives as a `-` followed by a `+`, which is the pair a
-client needs to run its own word diff over the change.
+A changed line arrives as a `-` followed by a `+`, which is the pair a client
+needs to run its own word diff. Every field has `items`, including a field of
+cardinality one, which reports one item at delta 0. A field's `status` follows
+from its items: the status they share, or `changed` when they differ.
 
-This module adds no markup of its own: there is no `<ins>`, no `<del>` and no CSS
-class anywhere in `ops`. That is not a promise that a line is plain text. Diff
-builds each side with the field's own plugin, so a formatted text field arrives
-with its HTML and a date field arrives as a `<time>` element. Treat every line as
-the field's own output and escape it when rendering it as text.
+The module does not add markup. Diff builds each side with the field's own
+plugin, so a formatted text field arrives with its HTML and a date field arrives
+as a `<time>` element. Escape every line before rendering it as text.
 
-`items` reports the same comparison per item, so a client can narrow a change to
-the value that carries it rather than highlighting the whole field. Every field
-has items whatever its cardinality, and a field of cardinality one reports one
-item at delta 0. So a client iterates `items` without first asking how many
-values a field takes, and entity UUID plus public field name plus `delta`
-addresses any change in the document.
+### Each child identifier
 
-A field's own `status` follows from its items: one status shared by every item is
-the field's status, and a mix is `changed`. The two can never disagree. The two
-sides' items are paired by delta, which is a position and not an identity, and
-the limitation below says what that cannot tell you.
-
-### Summary and tree summary
-
-The same four counts appear twice, under two names that answer different
-questions.
-
-| Attribute | Answers |
+| Key | Holds |
 | --- | --- |
-| `summary` | Did this entity's own fields change |
-| `tree_summary` | Did this entity or anything below it change |
+| `field` | The public name of the reference field |
+| `left_delta`, `right_delta` | Its position on that side, or `null` when absent |
+| `status` | `same`, `moved`, `added` or `removed` |
+| `match` | `id`, `position` or `none` |
 
-Both count fields, never items, so a field with ten values and one change counts
-as one `changed`. `summary` counts only what is present, so a field dropped by
-JSON:API or by field access is not in the totals, and the four counts always add
-up to the number of entries in `fields`.
+`status` describes the reference, not the content, so a block edited in place
+reports `same` while its own `tree_summary` reports the change. Read both.
 
-`tree_summary` adds every descendant's counts, to any depth. On a page whose text
-lives in paragraphs the two differ: a draft that only edited a block leaves
-`summary` all `same` and reports the edit in `tree_summary`. It counts what is in
-the document and nothing else, so a child the user may not view is counted
-nowhere above it.
+`match` is `id` for the same entity on both sides, which is exact, and `position`
+for two different entities paired at one delta whose text agreed, which is an
+inference. Filter on `match === 'id'` to act on exact matches only.
 
-Reach for `tree_summary` on a child rather than `children[].meta.status`, because
-a block whose text was rewritten in place keeps its id and its position. Its
-`meta.status` is `same` while its own `tree_summary` reports the change.
+Recursion follows Diff's rule, so `entity_reference_revisions` fields recurse and
+paragraphs appear as children. A plain `entity_reference` field does not, and its
+target is compared as a label on the parent.
 
-**Both summaries count field changes, and only field changes.** They do not see
-the shape of the tree. A draft that only reorders paragraphs, changing no text,
-reports an all-`same` `tree_summary` at the root: the blocks are the same entities
-with the same values, and the reference field they moved within never appears in
-`fields` because it recursed. The move is in the document, as a `moved` status on
-those children's `meta`, but no count reflects it.
+### Summaries, fieldsets and caching
 
-So `tree_summary` answers "did any content change", not "did this page change". A
-client that treats an all-`same` root as "nothing happened" will miss a
-reordering. To answer the wider question, read the root's `tree_summary` and also
-check whether any child reports `added`, `removed` or `moved`. Adding or removing
-a block does show up in the counts, because its fields count as `added` or
-`removed`; only a pure reorder is invisible.
+Both summaries count fields, never items. `summary` covers the entity's own
+fields and its four counts total the entries in `fields`. `tree_summary` adds
+every descendant's counts, so on a page built from paragraphs the two differ.
 
-### Asking for less
+A sparse fieldset trims each diff in the document, the nested ones included:
+`?fields[jsonapi_diff--diff]=tree_summary` returns the counts alone. `?include`
+is ignored, because the tree is already whole.
 
-The diff type takes a JSON:API sparse fieldset, so a client that wants the counts
-and nothing else asks for them:
-
-```bash
-curl -H 'Accept: application/vnd.api+json' \
-  'https://example.com/jsonapi/diff/node/article/85924444-4579-493c-8658-e654df08ff08?fields%5Bjsonapi_diff--diff%5D=tree_summary'
-```
-
-The fieldset names any combination of `summary`, `tree_summary`, `fields`,
-`left`, `right` and `children`. `type` and `id` are always present, as the
-specification requires, and a name that is not a member of the type is ignored.
-
-A fieldset belongs to a resource type rather than to a place in the document, so
-it trims every diff in the response, the children in `included` as well as the
-primary data. It trims members and not the tree: a fieldset without `children`
-drops that relationship from each resource, and the nested diffs stay in
-`included`.
-
-`?include` is ignored, because the tree is already whole.
-
-### Caching
-
-Every response includes the cache tags of both compared revisions and of every
-entity in the tree, the tags of Diff's own configuration, and cache contexts for
-`leftVersion`, `rightVersion`, the sparse fieldset, the user's permissions and
-the content language. The cacheability of every access decision is included,
-allowed or denied, so a `403` served to one user is not then served to a user who
-is allowed.
-
-Saving the entity again invalidates the cached diff. A different version pair is
-a different cache entry, and so is a different fieldset.
+Each response includes the cache tags of both revisions and every entity in the
+tree, Diff's configuration tags, and cache contexts for the two version
+parameters, the fieldset, the user's permissions and the content language. Saving
+the entity invalidates the cached diff.
 
 ## Access
 
-The module introduces no permission of its own. Each side is subject to the
-decision core JSON:API would make for that revision on its own individual route:
-view access to the entity, plus the site's revision view access for a non-default
-revision.
+The module defines no permission. Each side is subject to the decision core
+JSON:API makes for that revision on its own individual route: view access to the
+entity, plus revision view access for a non-default revision. A denial on either
+side is a `403` for the whole diff, and a label-only view counts as a denial.
 
-Either side denied is a `403` for the whole diff, and no field data from either
-revision reaches the client. A label-only view counts as a denial too, since a
-diff of one would disclose the fields the label hides. An entity that does not
-exist is a `404` whatever the user's access.
+Inside the tree, a field the user may not view is absent and uncounted, and an
+entity the user may not view is absent from `children` and from `included`. No
+`tree_summary` above it counts its fields, so a rollup never reports a change the
+reader cannot be shown.
 
-The route does not hide whether an entity exists. It loads the entity before it
-resolves the versions, so an unknown UUID is a `404` while a UUID that exists and
-whose revisions are denied is a `403`, and the two are distinguishable. Core
-JSON:API draws the same distinction on its own individual route, so this is no
-more disclosing than the rest of the API, but it is not a guarantee of
-non-enumeration and should not be relied on as one.
-
-Per-field view access applies inside the tree. A field the user may not view is
-absent from that entity's `fields` and is not counted in its `summary`. An entity
-the user may not view is dropped from the document entirely, and no
-`tree_summary` above it counts its fields, so the rollup never reports a change
-the reader cannot be shown.
-
-Two rules catch people out:
-
-- **`bypass node access` does not grant revision operations.** Core's node access
-  handler skips its own bypass for the four revision operations on purpose, so a
-  role holding `bypass node access` and nothing else is still denied the working
-  copy.
-- **Content moderation adds a rule for the working copy.** When that module is
-  installed, reading the latest revision of a moderated entity also needs `view
-  latest version`. A role that can read the published side and not the draft gets
-  a `403` on the bare URL, not a partial document.
-
-So the smallest role that can read the bare URL of a moderated article holds:
+The smallest role that reads the bare URL of a moderated article holds:
 
 | Permission | Comes from |
 | --- | --- |
 | `access content` | Node |
 | `view all revisions`, or `view <type> revisions` | Node |
 | `view latest version` | Content Moderation |
-| Whatever lets it see the unpublished draft, such as `view own unpublished content` | Node |
+| Whatever opens the unpublished draft, such as `view own unpublished content` | Node |
 
-The route is a JSON:API route, so it uses whatever authentication the site has
-already set up for JSON:API, whether that is a session cookie, an OAuth token or
-basic auth. There is no separate credential and no separate configuration.
+Core's node access handler skips its own bypass for revision operations, so
+`bypass node access` alone does not open the working copy. Granting `view all
+revisions` to anonymous makes every revision of every node public, through core
+JSON:API as much as through this route, so grant it to an authenticated editor
+role instead.
 
-Granting `view all revisions` to the anonymous role makes every revision of every
-node readable by anyone, through core JSON:API as much as through this route. On
-a site with unpublished drafts that is usually the wrong answer. Give it to an
-authenticated editor role, and let the frontend request the diff as the editor
-rather than as the site.
-
-## Discovery
-
-With [JSON:API Hypermedia](https://www.drupal.org/project/jsonapi_hypermedia)
-installed, every resource object of a revisionable entity type JSON:API exposes
-carries a `diff` member in its `links`, next to core's `latest-version` and
-`working-copy` links. Its `href` is the bare diff route for that entity, so a
-client follows a link instead of assembling a URL out of the type, bundle and
-UUID.
-
-The link is present only when the user could follow it. The provider asks the
-same question the route answers, through the same service: it resolves the two
-default versions and checks read access to both. A link and the route it points
-at cannot disagree, so an absent link is a definite answer rather than a `403`
-waiting to happen. The decision's cacheability is bubbled into the response, so a
-link's absence is not cached across users with different access.
-
-Exactness is not free. Each resource object costs one version resolution and two
-access checks, measured at about two extra database queries and well under a
-millisecond, so a fifty item collection pays about a hundred queries for its
-fifty links. A link that cannot lie is worth that, and a site that disagrees can
-leave JSON:API Hypermedia uninstalled and keep the route.
-
-It sits in `suggest` rather than in `require`, so Composer leaves it alone unless
-a site asks for it.
+The route uses whatever authentication the site already applies to JSON:API. With
+JSON:API Hypermedia installed, the `diff` link appears only when the user could
+follow it, because the provider resolves the same version pair the route does and
+checks access to both.
 
 ## Limitations
 
-This module reports the cases below less precisely than a reader might expect.
-Every one has a workaround, and none of them is a defect in the code.
+**A field's items are matched by delta.** Nothing else survives a save, because a
+field item does not carry an id. That reports an edit in place exactly. Insert an
+item at the front, though, and the rest shift, so the field reads as a run of
+changed items with one addition at the end. Where insertion order matters, model
+those items as referenced entities, which are matched by entity id.
 
-### Blocks with no id in common are paired by position
+**A positional pair is an inference.** Children that no id matched are paired at
+one delta of one field, when they share an entity type and bundle and their text
+agrees by at least half its words. That reads a page which kept its
+shape. An insertion moves the blocks after it, and a rewritten block no longer
+agrees, so both fall back to a removal and an addition. `match: position` marks
+every inference.
 
-Children are matched by entity id first. A draft holding new revisions of the
-same paragraphs, which is what Drupal's own paragraphs UI produces, matches
-exactly and reports `match: id`.
-
-A workflow that creates brand new paragraph entities for each draft leaves that
-pass with nothing to match. Those children are then paired by the position they
-hold, and each such pair reports `match: position`. That is a guess, and it is
-guarded three ways: both sides must sit at the same delta of the same reference
-field, must be the same entity type and bundle, and must share at least half
-their words, measured as a Dice coefficient over the fields the document reports
-for both of them. Below that, the two are left as an honest `removed` and
-`added`.
-
-The word guard needs words to weigh. Two blocks that hold no text of their own,
-which a container paragraph whose every field recurses does, are decided by the
-delta and the bundle alone. The blocks inside the container are then matched on
-their own merits.
-
-A pair sits at one position on both sides, so its `status` is always `same`. What
-changed is inside it, in that child's own `fields` and `tree_summary`.
-
-It reads a page that kept its shape, and does not recover a page that did not:
-
-- **An insertion or a deletion shifts everything after it.** Each new pairing is
-  then a block against the one beside it, which the word guard usually rejects,
-  so the run falls back to `removed` and `added`.
-- **A block rewritten from scratch is not a pair.** No threshold can both accept
-  a rewrite and reject an unrelated block.
-- **Reordering is invisible.** Only equal positions are paired, so two replaced
-  blocks that swapped places are four children, not two `moved` ones.
-- **A guess is still a guess.** Two blocks of one bundle that happen to share
-  their words will be paired, and `match: position` is the only warning.
-- **Access decides first.** A child the reader may not view leaves the tree
-  before the pairing runs, so it is never paired and never reported.
-
-**What to do:** keep the entity ids across drafts where you can. Load the
-existing paragraph and save a new revision of it rather than creating a
-replacement. Positional alignment is there for the flows where that is not
-possible, not as a substitute for them.
-
-### A field's items are matched by position
-
-`items` pairs the two sides by delta, because a delta is all a field item has.
-Unlike a referenced entity, an item carries no id that survives a save.
-
-That reports an edit in place exactly: a gallery of six images with the fourth
-swapped is five `same` items and one `changed`. It reports an insertion less
-well. An item added at the front shifts every item after it, so the field reads
-as a run of `changed` items with one `added` at the end. Nothing is lost, but the
-report says "these positions changed" where a reader wanted "one item was
-inserted here". Appending and truncating are unaffected.
-
-**What to do:** where insertion order matters and the items are substantial,
-model them as referenced entities. Those are matched by entity id under
-`children`, which survives reordering.
-
-### A recursed reference field has no entry of its own
-
-When a reference field recurses, its children appear under `children` and the
-field itself never appears in `fields`. There is no status for `field_blocks` as
-a field, so a client cannot ask "did the block list change" in one read.
-
-**What to do:** treat `children` as that field's report, and read two things
-from each child, not one. A child's `meta.status` describes the reference: an
-`added`, `removed` or `moved` child means the list itself changed. A child's own
-`tree_summary` describes its content: a block edited in place keeps its id and
-its position, so it is `same` with the edit inside it. A field whose children are
-all `same` **and** whose every child reports an all-`same` `tree_summary` did not
-change. Reading `meta.status` alone misses every in-place edit, which is the
-most common edit there is.
-
-### What it deliberately does not do
-
-- **No markup of its own.** `ops` holds plain lines, with no `<ins>`, no CSS
-  classes and no rendered table, because the frontend owns the theme. Note that
-  `left` and `right` are the strings Diff produced, and a few field types render
-  through their formatter, so core's `created` field arrives as a `<time>`
-  element.
-- **No word-level operations.** Lines are as fine as it goes. A changed line
-  comes through as a `-` and a `+` over the same region, which is the pair a
-  client needs to run its own word diff in whichever library it already has.
-- **No render coordinates.** The document says which field and which delta
-  changed, not where that sits on a rendered page.
-- **No write operations.** The route is `GET` only. Core's own routes revert,
-  publish and edit.
-- **No way to ask for a smaller tree.** A sparse fieldset trims each resource's
-  members and that is the whole of it. There is no `include` filtering, no
-  pagination, and no way to leave out the fields whose status is `same`.
-
-## For module maintainers
-
-**There are no hooks.** The module defines no hook and no event, so there is no
-`jsonapi_diff.api.php`. A field appears in the diff because Diff compares it and
-JSON:API exposes it, so the extension points are Diff's builder plugins and
-JSON:API's resource types rather than anything here.
-
-**It reads core JSON:API internals.** Every class in core's `jsonapi` module is
-marked `@internal`, and this module uses three of its services: the version
-negotiator, the entity access checker and the resource type repository. JSON:API
-Resources builds on the same internals, so the exposure is not new, but it is
-real. The mitigation is functional tests that assert the statuses and the
-document shape over real HTTP, so a core change shows up as a red pipeline rather
-than as a quiet change in output.
-
-**The document shape is alpha.** The tests pin the resource type name, the `id`
-format, the four field statuses, the four child statuses and the `ops` operation
-types, so none of those moves without a red pipeline here first. Treat `meta` as
-open for additional keys.
+The issue queue tracks the rest.
 
 ## FAQ
 
-**Q: Why does an unchanged field carry its full text on both sides?**
+**Q: A field is missing from the diff. Why?**
 
-**A:** Because the client this was built for needs the text anyway to render the
-page, so sending it once with the diff saves a second request. It does make a
-large tree a large payload. A client that does not need the text asks for
-`fields[jsonapi_diff--diff]=tree_summary,children` and walks the tree on the
-counts, then fetches the one diff it wants to show in full.
+**A:** Diff compares a field when it has a builder plugin for it and that plugin
+is not hidden. Without an explicit setting, Diff decides by asking whether the
+field appears in any view display, so a field hidden from every display is never
+compared. Set the field explicitly at `/admin/config/content/diff/fields`, which
+states the intent rather than relying on a side effect. Diff also skips fields
+that are not revisionable, and JSON:API can exclude a field from its resource
+type.
 
-**Q: Why does a date field's value hold a `<time>` element?**
+**Q: Why does an unchanged field send its full text?**
 
-**A:** Diff builds each side's string with the field's own plugin, and core's
-date fields render through a formatter that emits `<time>`. The module passes the
-string through rather than stripping tags, because stripping would be guessing at
-what the field meant. Handle `left` and `right` as opaque strings per field type,
-or set a different Diff plugin for the field.
-
-**Q: What happens to translations?**
-
-**A:** The comparison uses the current content language, the same as core
-JSON:API. A request on a language prefix reads that language's values on both
-sides, and the language is one of the response's cache contexts. One language per
-request, never two languages against each other.
-
-**Q: Is there an entity behind `jsonapi_diff--diff`?**
-
-**A:** No. It is a resource type the module declares for the document's shape.
-Nothing stores a diff, there is no individual route for the type name, and
-nothing is ever written back to it. Follow the `self` link on a diff resource to
-fetch it again where one is offered, and a `left` or `right` `related` link to
-reach real entity data.
-
-**Q: Can I diff a paragraph on its own?**
-
-**A:** Yes. The route takes any revisionable entity type JSON:API exposes, so
-`/jsonapi/diff/paragraph/block/{uuid}` works.
-
-Most `included` resources carry that URL as their own `self` link, with the two
-revision ids already filled in. Three kinds do not: a child only the left side
-has, a child only the right side has, and a child paired by position. The first
-two have only one revision to name, and the third names two entities rather than
-one, so none of them has a URL that restates the comparison. Read `links.self`
-and follow it when it is there; when it is not, fetch the parent diff in full to
-get that child's fields.
+**A:** The client this was built for renders the page from the same data, so
+sending it once saves a request. For the tree's shape alone, ask for
+`fields[jsonapi_diff--diff]=tree_summary,children` and walk the counts.
 
 ## Maintainers
 
