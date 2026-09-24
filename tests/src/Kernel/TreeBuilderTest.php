@@ -549,6 +549,46 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * Markup does not count towards the content guard.
+   *
+   * Diff builds a formatted text value with the field's own plugin, so the
+   * value arrives with its HTML. Counting tag names would let two unrelated
+   * blocks share the `p` of their wrapper, which on short text is enough to
+   * reach the threshold and report them as one block that changed.
+   */
+  public function testMarkupDoesNotPairUnrelatedBlocks(): void {
+    $before_bodies = ['<p class="lead">our history</p>'];
+    $after_bodies = ['<p class="lead">contact us</p>'];
+    [$left, $right, $before, $after] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    // The words a reader sees share nothing, so these are two blocks.
+    $this->assertCount(2, $diff->children);
+    $this->assertSame(ChildDiff::REMOVED, $this->childFor($diff, $before[0])->status);
+    $this->assertSame(ChildDiff::ADDED, $this->childFor($diff, $after[0])->status);
+  }
+
+  /**
+   * An edit inside markup is still a pair.
+   *
+   * The guard reads the text, so the tags neither help nor hinder a block
+   * that a person would call the same block.
+   */
+  public function testAnEditInsideMarkupStillPairs(): void {
+    $before_bodies = ['<p>the second block</p>'];
+    $after_bodies = ['<p>the second block, edited</p>'];
+    [$left, $right, $before] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(1, $diff->children);
+    $child = $this->childFor($diff, $before[0]);
+    $this->assertSame(ChildDiff::MATCH_POSITION, $child->match);
+    $this->assertSame(FieldDiff::CHANGED, $child->diff->fields['field_body']->status);
+  }
+
+  /**
    * Two bundles at one position are never paired.
    *
    * The bundles decide what a block is. Two of them are different things,

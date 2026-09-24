@@ -633,6 +633,13 @@ final readonly class TreeBuilder {
    * Punctuation and case are dropped, so a value that only gained a comma
    * still reads as the same words.
    *
+   * Markup is dropped first. Diff builds each side with the field's own
+   * plugin, so a formatted text field arrives with its HTML, and a tag name
+   * is not a word. Counting tag names lets two unrelated blocks share the
+   * `p` of their paragraph wrapper, which is enough to pass the similarity
+   * guard on short text. Each tag becomes a space rather than nothing, so
+   * the last word inside a tag does not join the first word after it.
+   *
    * @param array<int, string> $values
    *   The value of each delta.
    *
@@ -640,7 +647,9 @@ final readonly class TreeBuilder {
    *   The words, in order.
    */
   private function words(array $values): array {
-    $words = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower(implode(' ', $values)), -1, PREG_SPLIT_NO_EMPTY);
+    $text = preg_replace('/<[^>]*+>/', ' ', implode(' ', $values)) ?? '';
+    $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $words = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($text), -1, PREG_SPLIT_NO_EMPTY);
     return $words === FALSE ? [] : $words;
   }
 
