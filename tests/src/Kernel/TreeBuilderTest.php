@@ -570,6 +570,43 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * An attribute holding a closing bracket is still not text.
+   *
+   * Dropping everything between angle brackets with a regular expression
+   * stops at the first `>`, which leaves the rest of a quoted attribute
+   * behind as if a reader could see it. Two unrelated blocks then share that
+   * attribute's words and reach the threshold.
+   */
+  public function testBracketInAttributeDoesNotPairUnrelatedBlocks(): void {
+    $before_bodies = ['<p title=">shared">alpha</p>'];
+    $after_bodies = ['<p title=">shared">beta</p>'];
+    [$left, $right, $before, $after] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(2, $diff->children);
+    $this->assertSame(ChildDiff::REMOVED, $this->childFor($diff, $before[0])->status);
+    $this->assertSame(ChildDiff::ADDED, $this->childFor($diff, $after[0])->status);
+  }
+
+  /**
+   * An encoded entity reads as the character it stands for.
+   *
+   * The parser decodes the entities, so a value written with `&amp;` gives
+   * the same words as one written with a bare ampersand.
+   */
+  public function testAnEncodedEntityReadsAsItsCharacter(): void {
+    $before_bodies = ['<p>rates &amp; charges for the year</p>'];
+    $after_bodies = ['<p>rates &amp; charges for the term</p>'];
+    [$left, $right, $before] = $this->replaceBlocks($before_bodies, $after_bodies);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertCount(1, $diff->children);
+    $this->assertSame(ChildDiff::MATCH_POSITION, $this->childFor($diff, $before[0])->match);
+  }
+
+  /**
    * An edit inside markup is still a pair.
    *
    * The guard reads the text, so the tags neither help nor hinder a block

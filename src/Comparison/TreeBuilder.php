@@ -9,6 +9,7 @@ use Drupal\Component\Diff\Engine\DiffOpAdd;
 use Drupal\Component\Diff\Engine\DiffOpChange;
 use Drupal\Component\Diff\Engine\DiffOpCopy;
 use Drupal\Component\Diff\Engine\DiffOpDelete;
+use Drupal\Component\Utility\Html;
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Session\AccountInterface;
@@ -633,12 +634,16 @@ final readonly class TreeBuilder {
    * Punctuation and case are dropped, so a value that only gained a comma
    * still reads as the same words.
    *
-   * Markup is dropped first. Diff builds each side with the field's own
-   * plugin, so a formatted text field arrives with its HTML, and a tag name
-   * is not a word. Counting tag names lets two unrelated blocks share the
-   * `p` of their paragraph wrapper, which is enough to pass the similarity
-   * guard on short text. Each tag becomes a space rather than nothing, so
-   * the last word inside a tag does not join the first word after it.
+   * Only the text a reader sees counts. Diff builds each side with the
+   * field's own plugin, so a formatted text field arrives with its HTML, and
+   * a tag or attribute name is not a word. Counting them lets two unrelated
+   * blocks share the `p` of their paragraph wrapper, which on short text is
+   * enough to pass the similarity guard.
+   *
+   * The markup is parsed rather than pattern matched. A regular expression
+   * that drops everything between angle brackets stops at the first `>`, so
+   * a `>` inside a quoted attribute leaks the rest of that attribute into
+   * the text.
    *
    * @param array<int, string> $values
    *   The value of each delta.
@@ -647,9 +652,18 @@ final readonly class TreeBuilder {
    *   The words, in order.
    */
   private function words(array $values): array {
-    $text = preg_replace('/<[^>]*+>/', ' ', implode(' ', $values)) ?? '';
-    $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-    $words = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($text), -1, PREG_SPLIT_NO_EMPTY);
+    $text = trim(implode(' ', $values));
+    if ($text === '') {
+      return [];
+    }
+    $parts = [];
+    foreach ((new \DOMXPath(Html::load($text)))->query('//text()') ?: [] as $node) {
+      $parts[] = $node->nodeValue ?? '';
+    }
+    // The text nodes are joined with a space, so the last word inside one
+    // element does not join the first word of the next. The parser has
+    // already decoded the entities.
+    $words = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower(implode(' ', $parts)), -1, PREG_SPLIT_NO_EMPTY);
     return $words === FALSE ? [] : $words;
   }
 
