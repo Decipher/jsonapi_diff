@@ -64,7 +64,10 @@ changed without rendering Drupal's admin theme.
   the block it edited and leaves the rest alone. A pair must sit at the same
   delta of the same field, be of the same entity type and bundle, and share at
   least half its words with the other side, measured over the fields the reader
-  may view. Below that the two stay an honest removal and addition.
+  may view and ignoring any markup those fields carry. Below that the two stay an
+  honest removal and addition. Two blocks that hold no text of their own, which a
+  container paragraph whose every field recurses does, have nothing to measure, so
+  the delta and the bundle decide that pair alone.
 - `match` on every child identifier's `meta`, saying how the two sides were
   brought together: `id` for the same entity on both sides, `position` for a
   pair the module inferred, and `none` for a child only one side has. A
