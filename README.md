@@ -188,7 +188,9 @@ sent, so `?leftVersion=rel:latest-version` and `?leftVersion=id:1` produce the
 same `id` when they resolve to the same revision. A side the entity is absent
 from leaves its segment empty, as in `f1bc6380-bb56-4f1b-9c73-b8e3416e75b3::11`.
 
-A response, cut to one field, one child and one `included` resource:
+A small response in full: one changed field on the node, one child that has no
+fields of its own, and nothing else. The counts describe exactly what is shown,
+so they can be checked against the rules below.
 
 ```json
 {
@@ -196,8 +198,8 @@ A response, cut to one field, one child and one `included` resource:
     "type": "jsonapi_diff--diff",
     "id": "85924444-4579-493c-8658-e654df08ff08:1:2",
     "attributes": {
-      "summary": { "added": 0, "removed": 0, "changed": 1, "same": 3 },
-      "tree_summary": { "added": 1, "removed": 0, "changed": 2, "same": 5 },
+      "summary": { "added": 0, "removed": 0, "changed": 1, "same": 0 },
+      "tree_summary": { "added": 0, "removed": 0, "changed": 1, "same": 0 },
       "fields": {
         "title": {
           "label": "Title",
@@ -266,8 +268,8 @@ A response, cut to one field, one child and one `included` resource:
         }
       },
       "attributes": {
-        "summary": { "added": 0, "removed": 0, "changed": 0, "same": 2 },
-        "tree_summary": { "added": 0, "removed": 0, "changed": 0, "same": 2 },
+        "summary": { "added": 0, "removed": 0, "changed": 0, "same": 0 },
+        "tree_summary": { "added": 0, "removed": 0, "changed": 0, "same": 0 },
         "fields": {}
       }
     }
@@ -275,11 +277,11 @@ A response, cut to one field, one child and one `included` resource:
 }
 ```
 
-`right` has the same shape as `left`, and the members left out above follow the
-same patterns. An entity with nothing of its own to report has `"fields": {}`, an
-empty JSON object rather than an empty array. A response whose comparison
-recursed into nothing carries no `included` member at all, so treat it as
-optional rather than expecting an empty array.
+`right` has the same shape as `left`, and is left out above only to keep the
+example short. An entity with nothing of its own to report has `"fields": {}`, an
+empty JSON object rather than an empty array, which is why the child's counts are
+all zero. A response whose comparison recursed into nothing carries no `included`
+member at all, so treat it as optional rather than expecting an empty array.
 
 ### Left and right
 
@@ -345,9 +347,15 @@ not the resource type's.
 | `items` | The same four keys again, per item of the field, each with its `delta` |
 
 Each entry in `ops` is `{"type": ..., "lines": [...]}`, where `type` is `=` for
-carried lines, `-` for removed and `+` for added, and `lines` holds them in order
-with no markup. A changed line arrives as a `-` followed by a `+`, which is the
-pair a client needs to run its own word diff over the change.
+carried lines, `-` for removed and `+` for added, and `lines` holds them in
+order. A changed line arrives as a `-` followed by a `+`, which is the pair a
+client needs to run its own word diff over the change.
+
+This module adds no markup of its own: there is no `<ins>`, no `<del>` and no CSS
+class anywhere in `ops`. That is not a promise that a line is plain text. Diff
+builds each side with the field's own plugin, so a formatted text field arrives
+with its HTML and a date field arrives as a `<time>` element. Treat every line as
+the field's own output and escape it when rendering it as text.
 
 `items` reports the same comparison per item, so a client can narrow a change to
 the value that carries it rather than highlighting the whole field. Every field
@@ -376,19 +384,29 @@ as one `changed`. `summary` counts only what is present, so a field dropped by
 JSON:API or by field access is not in the totals, and the four counts always add
 up to the number of entries in `fields`.
 
-`tree_summary` adds every descendant's counts, to any depth. On the root it
-answers "did this page change", which is the question a comparison UI asks. On a
-page whose text lives in paragraphs the two differ: a draft that only edited a
-block leaves `summary` all `same` and reports the edit in `tree_summary`. It
-counts what is in the document and nothing else, so a child the user may not view
-is counted nowhere above it.
+`tree_summary` adds every descendant's counts, to any depth. On a page whose text
+lives in paragraphs the two differ: a draft that only edited a block leaves
+`summary` all `same` and reports the edit in `tree_summary`. It counts what is in
+the document and nothing else, so a child the user may not view is counted
+nowhere above it.
 
 Reach for `tree_summary` on a child rather than `children[].meta.status`, because
 a block whose text was rewritten in place keeps its id and its position. Its
 `meta.status` is `same` while its own `tree_summary` reports the change.
 
-A client that only needs to know whether anything changed never has to walk the
-tree. `tree_summary` on the primary data already holds the counts for all of it.
+**Both summaries count field changes, and only field changes.** They do not see
+the shape of the tree. A draft that only reorders paragraphs, changing no text,
+reports an all-`same` `tree_summary` at the root: the blocks are the same entities
+with the same values, and the reference field they moved within never appears in
+`fields` because it recursed. The move is in the document, as a `moved` status on
+those children's `meta`, but no count reflects it.
+
+So `tree_summary` answers "did any content change", not "did this page change". A
+client that treats an all-`same` root as "nothing happened" will miss a
+reordering. To answer the wider question, read the root's `tree_summary` and also
+check whether any child reports `added`, `removed` or `moved`. Adding or removing
+a block does show up in the counts, because its fields count as `added` or
+`removed`; only a pure reorder is invisible.
 
 ### Asking for less
 
@@ -434,8 +452,14 @@ revision.
 Either side denied is a `403` for the whole diff, and no field data from either
 revision reaches the client. A label-only view counts as a denial too, since a
 diff of one would disclose the fields the label hides. An entity that does not
-exist is a `404` whatever the user's access, so the route cannot be used to learn
-that an entity exists.
+exist is a `404` whatever the user's access.
+
+The route does not hide whether an entity exists. It loads the entity before it
+resolves the versions, so an unknown UUID is a `404` while a UUID that exists and
+whose revisions are denied is a `403`, and the two are distinguishable. Core
+JSON:API draws the same distinction on its own individual route, so this is no
+more disclosing than the rest of the API, but it is not a guarantee of
+non-enumeration and should not be relied on as one.
 
 Per-field view access applies inside the tree. A field the user may not view is
 absent from that entity's `fields` and is not counted in its `summary`. An entity
@@ -567,9 +591,14 @@ When a reference field recurses, its children appear under `children` and the
 field itself never appears in `fields`. There is no status for `field_blocks` as
 a field, so a client cannot ask "did the block list change" in one read.
 
-**What to do:** treat `children` as that field's report. A field whose children
-are all `same` did not change, and any `added`, `removed` or `moved` child means
-it did.
+**What to do:** treat `children` as that field's report, and read two things
+from each child, not one. A child's `meta.status` describes the reference: an
+`added`, `removed` or `moved` child means the list itself changed. A child's own
+`tree_summary` describes its content: a block edited in place keeps its id and
+its position, so it is `same` with the edit inside it. A field whose children are
+all `same` **and** whose every child reports an all-`same` `tree_summary` did not
+change. Reading `meta.status` alone misses every in-place edit, which is the
+most common edit there is.
 
 ### What it deliberately does not do
 
@@ -639,13 +668,21 @@ request, never two languages against each other.
 **A:** No. It is a resource type the module declares for the document's shape.
 Nothing stores a diff, there is no individual route for the type name, and
 nothing is ever written back to it. Follow the `self` link on a diff resource to
-fetch it again, and a `left` or `right` `related` link to reach real entity data.
+fetch it again where one is offered, and a `left` or `right` `related` link to
+reach real entity data.
 
 **Q: Can I diff a paragraph on its own?**
 
 **A:** Yes. The route takes any revisionable entity type JSON:API exposes, so
-`/jsonapi/diff/paragraph/block/{uuid}` works. Each `included` resource's `self`
-link is that URL for that child, with the two revision ids already filled in.
+`/jsonapi/diff/paragraph/block/{uuid}` works.
+
+Most `included` resources carry that URL as their own `self` link, with the two
+revision ids already filled in. Three kinds do not: a child only the left side
+has, a child only the right side has, and a child paired by position. The first
+two have only one revision to name, and the third names two entities rather than
+one, so none of them has a URL that restates the comparison. Read `links.self`
+and follow it when it is there; when it is not, fetch the parent diff in full to
+get that child's fields.
 
 ## Maintainers
 
