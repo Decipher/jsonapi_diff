@@ -1,0 +1,9 @@
+jsonapi_diff.diff:
+  path: '/%jsonapi%/diff/{entity_type}/{bundle}/{uuid}'
+  defaults:
+    _jsonapi_resource: Drupal\jsonapi_diff\Resource\DiffResource
+  methods: [GET]
+  requirements:
+    # The route has no permission of its own. Each compared revision is
+    # access checked as core JSON:API would check it, in the resource.
+    _access: 'TRUE'

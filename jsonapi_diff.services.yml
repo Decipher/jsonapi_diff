@@ -1,0 +1,31 @@
+services:
+  # One place decides whether an entity may be served, so the rule applied
+  # to the compared revisions and the rule applied to every entity in the
+  # tree cannot drift apart.
+  jsonapi_diff.entity_view_check:
+    class: Drupal\jsonapi_diff\Access\EntityViewCheck
+    arguments:
+      - '@jsonapi.entity_access_checker'
+  jsonapi_diff.revision_pair_resolver:
+    class: Drupal\jsonapi_diff\RevisionPairResolver
+    arguments:
+      - '@jsonapi.version_negotiator'
+      - '@jsonapi_diff.entity_view_check'
+  # The class is swapped for its impostor subclass by the service provider,
+  # because the serializer only accepts normalizers from JSON:API's own
+  # namespace. The lowest decoration priority is applied last and so wraps
+  # the other decorators of this service, which is where a finished
+  # normalization can be adjusted.
+  jsonapi_diff.normalizer.resource_object:
+    class: Drupal\jsonapi\Normalizer\ImpostorFrom\jsonapi_diff\DiffResourceObjectNormalizerImpostor
+    decorates: serializer.normalizer.resource_object.jsonapi
+    decoration_priority: -200
+    arguments:
+      - '@jsonapi_diff.normalizer.resource_object.inner'
+  jsonapi_diff.tree_builder:
+    class: Drupal\jsonapi_diff\Comparison\TreeBuilder
+    arguments:
+      - '@diff.entity_comparison'
+      - '@plugin.manager.diff.builder'
+      - '@jsonapi.resource_type.repository'
+      - '@jsonapi_diff.entity_view_check'

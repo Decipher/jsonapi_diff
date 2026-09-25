@@ -1,0 +1,42 @@
+<?php
+
+/**
+ * @file
+ * Restricts, aliases and disables fields and resource types, for testing.
+ */
+
+declare(strict_types=1);
+
+use Drupal\Core\Access\AccessResult;
+use Drupal\Core\Access\AccessResultInterface;
+use Drupal\Core\Entity\EntityTypeInterface;
+use Drupal\Core\Field\FieldDefinitionInterface;
+use Drupal\jsonapi_diff_test\TestAccess;
+use Drupal\jsonapi_diff_test\TestParagraphAccessControlHandler;
+
+/**
+ * Implements hook_entity_type_alter().
+ */
+function jsonapi_diff_test_entity_type_alter(array &$entity_types): void {
+  $paragraph = $entity_types['paragraph'] ?? NULL;
+  if ($paragraph instanceof EntityTypeInterface) {
+    $paragraph->setAccessClass(TestParagraphAccessControlHandler::class);
+  }
+}
+
+/**
+ * Implements hook_entity_field_access().
+ */
+function jsonapi_diff_test_entity_field_access(string $operation, FieldDefinitionInterface $field_definition): AccessResultInterface {
+  if ($operation !== 'view') {
+    return AccessResult::neutral();
+  }
+  // The rule decides per user, so every result says so, and names the rule
+  // that decided it. A neutral result carries the same metadata, because
+  // the rule ran either way. This is what a contributed per-field access
+  // module does.
+  $result = $field_definition->getName() === TestAccess::RESTRICTED_FIELD
+    ? AccessResult::forbidden('The field is restricted for testing.')
+    : AccessResult::neutral();
+  return $result->addCacheTags([TestAccess::CACHE_TAG])->cachePerUser();
+}

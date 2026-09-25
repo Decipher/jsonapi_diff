@@ -1,0 +1,6 @@
+# The link relation type of the discovery link.
+# See https://tools.ietf.org/html/rfc8288#section-2.1.2
+diff:
+  description: "The link's target points to a resource describing the difference between two revisions of the link's context."
+  reference: '[TBD]'
+  notes: "This link relation type is not registered with IANA. JSON:API Hypermedia takes the same approach for the JSON:API specification's own add, update and remove relation types."

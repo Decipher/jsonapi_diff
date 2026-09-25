@@ -1,0 +1,365 @@
+diff --git a/examples/Plugin/Derivative/EntityPublishedInterfaceLinkProviderDeriver.php b/examples/Plugin/Derivative/EntityPublishedInterfaceLinkProviderDeriver.php
+index 647f0dc..66e1691 100644
+--- a/examples/Plugin/Derivative/EntityPublishedInterfaceLinkProviderDeriver.php
++++ b/examples/Plugin/Derivative/EntityPublishedInterfaceLinkProviderDeriver.php
+@@ -11,7 +11,7 @@ use Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ 
+ /**
+- * Class EntityPublishedInterfaceLinkProviderDeriver.
++ * Example link provider deriver.
+  *
+  * @internal
+  */
+diff --git a/jsonapi_hypermedia.services.yml b/jsonapi_hypermedia.services.yml
+index 578fa6f..1b03635 100644
+--- a/jsonapi_hypermedia.services.yml
++++ b/jsonapi_hypermedia.services.yml
+@@ -5,6 +5,8 @@ services:
+     calls:
+       - [setCurrentRouteMatch, ['@current_route_match']]
+       - [setLinkRelationTypeManager, ['@plugin.manager.link_relation_type']]
++      - [setRenderer, ['@renderer']]
++      - [setRequestStack, ['@request_stack']]
+ 
+   serializer.normalizer.link_collection.jsonapi_hypermedia:
+     class: Drupal\jsonapi\Normalizer\JsonapiHypermediaImpostor\JsonapiHypermediaLinkCollectionNormalizer
+diff --git a/src/AccessRestrictedLink.php b/src/AccessRestrictedLink.php
+index 5f20d95..b2d1c2f 100644
+--- a/src/AccessRestrictedLink.php
++++ b/src/AccessRestrictedLink.php
+@@ -38,7 +38,7 @@ final class AccessRestrictedLink implements CacheableDependencyInterface {
+    *
+    * @param \Drupal\Core\Access\AccessResultInterface $access_result
+    *   An access result.
+-   * @param \Drupal\Core\Cache\CacheableDependencyInterface $link_cacheability
++   * @param \Drupal\Core\Cache\CacheableDependencyInterface|null $link_cacheability
+    *   (optional) Cacheability of the generated link.
+    * @param \Drupal\Core\Url $target
+    *   (optional) The link URL.
+@@ -50,7 +50,7 @@ final class AccessRestrictedLink implements CacheableDependencyInterface {
+    *   (optional) The link's context. NULL if the default context shouldn't be
+    *   overridden.
+    */
+-  protected function __construct(AccessResultInterface $access_result, CacheableDependencyInterface $link_cacheability = NULL, Url $target = NULL, $link_relation_type = '', array $target_attributes = [], $context = NULL) {
++  protected function __construct(AccessResultInterface $access_result, ?CacheableDependencyInterface $link_cacheability = NULL, ?Url $target = NULL, $link_relation_type = '', array $target_attributes = [], $context = NULL) {
+     // Most arguments can be omitted if the link is inaccessible.
+     assert(!$access_result->isAllowed() || ($link_cacheability && $target && !empty($link_relation_type)));
+     assert(is_null($context) || $context instanceof Url);
+@@ -93,7 +93,7 @@ final class AccessRestrictedLink implements CacheableDependencyInterface {
+    *   The link's relation type.
+    * @param array $target_attributes
+    *   (optional) The link's target attributes.
+-   * @param \Drupal\Core\Url $context
++   * @param \Drupal\Core\Url|null $context
+    *   (optional) The link's context. This will override the default link
+    *   context via an `anchor` link param. The default context is derived from a
+    *   link's location in the response document.
+@@ -103,7 +103,7 @@ final class AccessRestrictedLink implements CacheableDependencyInterface {
+    *
+    * @see \Drupal\jsonapi_hypermedia\AccessRestrictedLink::createInaccessibleLink()
+    */
+-  public static function createLink(AccessResultInterface $access_result, CacheableDependencyInterface $link_cacheability, Url $url, $link_relation_type, array $target_attributes = [], Url $context = NULL) {
++  public static function createLink(AccessResultInterface $access_result, CacheableDependencyInterface $link_cacheability, Url $url, $link_relation_type, array $target_attributes = [], ?Url $context = NULL) {
+     return new static($access_result, $link_cacheability, $url, $link_relation_type, $target_attributes, $context);
+   }
+ 
+diff --git a/src/LinkProviderInterface.php b/src/LinkProviderInterface.php
+index 1919062..39f4168 100644
+--- a/src/LinkProviderInterface.php
++++ b/src/LinkProviderInterface.php
+@@ -3,7 +3,7 @@
+ namespace Drupal\jsonapi_hypermedia;
+ 
+ /**
+- * Interface LinkProviderInterface.
++ * Interface for the link provider.
+  *
+  * @see \Drupal\jsonapi_hypermedia\Plugin\LinkProviderBase;
+  */
+diff --git a/src/Normalizer/JsonapiHypermediaImpostor/JsonapiHypermediaLinkCollectionNormalizer.php b/src/Normalizer/JsonapiHypermediaImpostor/JsonapiHypermediaLinkCollectionNormalizer.php
+index ebd0c80..d073f76 100644
+--- a/src/Normalizer/JsonapiHypermediaImpostor/JsonapiHypermediaLinkCollectionNormalizer.php
++++ b/src/Normalizer/JsonapiHypermediaImpostor/JsonapiHypermediaLinkCollectionNormalizer.php
+@@ -58,7 +58,8 @@ final class JsonapiHypermediaLinkCollectionNormalizer extends LinkCollectionNorm
+    */
+   public function normalize($link_collection, $format = NULL, array $context = []): array|string|int|float|bool|\ArrayObject|NULL {
+     assert($link_collection instanceof LinkCollection);
+-    // @todo: remove this render context once https://www.drupal.org/project/drupal/issues/3055889 lands.
++    // @todo remove this render context once
++    // https://www.drupal.org/project/drupal/issues/3055889 lands.
+     $render_context = new RenderContext();
+     $custom_links = $this->renderer->executeInRenderContext($render_context, function () use ($link_collection) {
+       return $this->linkProviderManager->getLinkCollection($link_collection->getContext());
+diff --git a/src/Plugin/LinkProviderBase.php b/src/Plugin/LinkProviderBase.php
+index 326d8bb..c4cd9f3 100644
+--- a/src/Plugin/LinkProviderBase.php
++++ b/src/Plugin/LinkProviderBase.php
+@@ -6,7 +6,7 @@ use Drupal\Core\Plugin\PluginBase;
+ use Drupal\jsonapi_hypermedia\LinkProviderInterface;
+ 
+ /**
+- * Class LinkProviderBase.
++ * Base class for link providers.
+  */
+ abstract class LinkProviderBase extends PluginBase implements LinkProviderInterface {
+ 
+diff --git a/src/Plugin/LinkProviderManager.php b/src/Plugin/LinkProviderManager.php
+index 5b70c41..d30af9c 100644
+--- a/src/Plugin/LinkProviderManager.php
++++ b/src/Plugin/LinkProviderManager.php
+@@ -9,6 +9,7 @@ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Http\LinkRelationTypeInterface;
+ use Drupal\Core\Http\LinkRelationTypeManager;
+ use Drupal\Core\Plugin\DefaultPluginManager;
++use Drupal\Core\Render\RendererInterface;
+ use Drupal\Core\Routing\RouteMatchInterface;
+ use Drupal\jsonapi\JsonApiResource\ErrorCollection;
+ use Drupal\jsonapi\JsonApiResource\JsonApiDocumentTopLevel;
+@@ -22,6 +23,7 @@ use Drupal\jsonapi\Routing\Routes;
+ use Drupal\jsonapi_hypermedia\AccessRestrictedLink;
+ use Drupal\jsonapi_hypermedia\Annotation\JsonapiHypermediaLinkProvider;
+ use Drupal\jsonapi_hypermedia\LinkProviderInterface;
++use Symfony\Component\HttpFoundation\RequestStack;
+ 
+ /**
+  * Manages discovery and instantiation of resourceFieldEnhancer plugins.
+@@ -62,6 +64,13 @@ final class LinkProviderManager extends DefaultPluginManager implements LinkProv
+    */
+   protected $linkRelationTypeManager;
+ 
++  /**
++   * The request stack.
++   *
++   * @var \Symfony\Component\HttpFoundation\RequestStack
++   */
++  protected $requestStack;
++
+   /**
+    * Constructs a new HypermediaProviderManager.
+    *
+@@ -105,6 +114,26 @@ final class LinkProviderManager extends DefaultPluginManager implements LinkProv
+     $this->linkRelationTypeManager = $link_relation_type_manager;
+   }
+ 
++  /**
++   * Set the renderer.
++   *
++   * @param \Drupal\Core\Render\RendererInterface $renderer
++   *   The renderer service.
++   */
++  public function setRenderer(RendererInterface $renderer) {
++    $this->renderer = $renderer;
++  }
++
++  /**
++   * Sets the request stack.
++   *
++   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   *   The request stack.
++   */
++  public function setRequestStack(RequestStack $request_stack) {
++    $this->requestStack = $request_stack;
++  }
++
+   /**
+    * {@inheritdoc}
+    */
+@@ -175,19 +204,18 @@ final class LinkProviderManager extends DefaultPluginManager implements LinkProv
+    * @param \Drupal\Core\Cache\CacheableMetadata|null $cacheability
+    *   The access related cacheability to be captured or NULL if there is none.
+    *
+-   * @todo: removes this once https://www.drupal.org/project/drupal/issues/3055889 lands.
++   * @todo removes this once https://www.drupal.org/project/drupal/issues/3055889 lands.
+    */
+   protected function bubbleAccessCacheability($cacheability) {
+     assert(is_null($cacheability) || $cacheability instanceof CacheableMetadata);
+     if (is_null($cacheability)) {
+       return;
+     }
+-    $request = \Drupal::requestStack()->getCurrentRequest();
+-    $renderer = \Drupal::service('renderer');
+-    if ($request->isMethodCacheable() && $renderer->hasRenderContext()) {
++    $request = $this->requestStack->getCurrentRequest();
++    if ($request->isMethodCacheable() && $this->renderer->hasRenderContext()) {
+       $build = [];
+       $cacheability->applyTo($build);
+-      $renderer->render($build);
++      $this->renderer->render($build);
+     }
+   }
+ 
+@@ -268,7 +296,7 @@ final class LinkProviderManager extends DefaultPluginManager implements LinkProv
+                 return $plugin_definition['link_context']['relationship_object'];
+               }
+               $route = $this->currentRouteMatch->getRouteObject();
+-              list($resource_type_name, $relationship_field_name) = $plugin_definition['link_context']['relationship_object'];
++              [$resource_type_name, $relationship_field_name] = $plugin_definition['link_context']['relationship_object'];
+               return $route->getDefault(Routes::RESOURCE_TYPE_KEY) === $resource_type_name && $route->getDefault('related') === $relationship_field_name;
+ 
+             default:
+@@ -281,7 +309,7 @@ final class LinkProviderManager extends DefaultPluginManager implements LinkProv
+ 
+         case 'relationship_object':
+           assert($context instanceof Relationship);
+-          list($resource_type_name, $relationship_field_name) = $plugin_definition['link_context'][$context_type];
++          [$resource_type_name, $relationship_field_name] = $plugin_definition['link_context'][$context_type];
+           return $context->getContext()->getResourceType()->getTypeName() === $resource_type_name && $context->getFieldName() === $relationship_field_name;
+ 
+         default:
+diff --git a/src/Plugin/LinkProviderManagerInterface.php b/src/Plugin/LinkProviderManagerInterface.php
+index fcfccfc..f3aa277 100644
+--- a/src/Plugin/LinkProviderManagerInterface.php
++++ b/src/Plugin/LinkProviderManagerInterface.php
+@@ -6,7 +6,7 @@ use Drupal\Component\Plugin\Discovery\CachedDiscoveryInterface;
+ use Drupal\Component\Plugin\PluginManagerInterface;
+ 
+ /**
+- * Interface LinkProviderManagerInterface.
++ * Interface for the link provider manager.
+  *
+  * @see \Drupal\jsonapi_hypermedia\Annotation\JsonapiHypermediaLinkProvider
+  * @see \Drupal\jsonapi_hypermedia\Plugin\LinkProviderManager
+diff --git a/tests/modules/jsonapi_hypermedia_test_link_providers/src/Plugin/Derivative/TestLinkProviderDeriver.php b/tests/modules/jsonapi_hypermedia_test_link_providers/src/Plugin/Derivative/TestLinkProviderDeriver.php
+index 882e629..727e11c 100644
+--- a/tests/modules/jsonapi_hypermedia_test_link_providers/src/Plugin/Derivative/TestLinkProviderDeriver.php
++++ b/tests/modules/jsonapi_hypermedia_test_link_providers/src/Plugin/Derivative/TestLinkProviderDeriver.php
+@@ -4,19 +4,38 @@ namespace Drupal\jsonapi_hypermedia_test_link_providers\Plugin\Derivative;
+ 
+ use Drupal\Component\Plugin\Derivative\DeriverBase;
+ use Drupal\Component\Utility\Random;
++use Drupal\Core\Plugin\Discovery\ContainerDeriverInterface;
++use Drupal\Core\State\StateInterface;
++use Symfony\Component\DependencyInjection\ContainerInterface;
+ 
+ /**
+  * Derives test plugins.
+  *
+  * @internal
+  */
+-final class TestLinkProviderDeriver extends DeriverBase {
++final class TestLinkProviderDeriver extends DeriverBase implements ContainerDeriverInterface {
++
++  /**
++   * The Drupal state.
++   *
++   * @var \Drupal\Core\State\StateInterface
++   */
++  protected StateInterface $state;
++
++  /**
++   * {@inheritdoc}
++   */
++  public static function create(ContainerInterface $container, $base_plugin_id) {
++    $instance = new self();
++    $instance->state = $container->get('state');
++    return $instance;
++  }
+ 
+   /**
+    * {@inheritdoc}
+    */
+   public function getDerivativeDefinitions($base_plugin_definition) {
+-    $plugin_template = \Drupal::state()->get('jsonapi_hypermedia_test_link_providers.template');
++    $plugin_template = $this->state->get('jsonapi_hypermedia_test_link_providers.template');
+     $random = new Random();
+     $definitions['not_restricted'] = [
+       'link_key' => $random->name(8, TRUE),
+diff --git a/tests/modules/jsonapi_hypermedia_test_link_providers/src/Plugin/jsonapi_hypermedia/LinkProvider/TestLinkProvider.php b/tests/modules/jsonapi_hypermedia_test_link_providers/src/Plugin/jsonapi_hypermedia/LinkProvider/TestLinkProvider.php
+index 970c12f..70e97d0 100644
+--- a/tests/modules/jsonapi_hypermedia_test_link_providers/src/Plugin/jsonapi_hypermedia/LinkProvider/TestLinkProvider.php
++++ b/tests/modules/jsonapi_hypermedia_test_link_providers/src/Plugin/jsonapi_hypermedia/LinkProvider/TestLinkProvider.php
+@@ -13,7 +13,7 @@ use Drupal\jsonapi_hypermedia\Plugin\LinkProviderBase;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ 
+ /**
+- * Class TestLinkProvider.
++ * Test link provider.
+  *
+  * @JsonapiHypermediaLinkProvider(
+  *   id = "test_link_provider",
+diff --git a/tests/src/Functional/LinkProviderTest.php b/tests/src/Functional/LinkProviderTest.php
+index bf89747..5a0bb62 100644
+--- a/tests/src/Functional/LinkProviderTest.php
++++ b/tests/src/Functional/LinkProviderTest.php
+@@ -16,7 +16,7 @@ use Drupal\user\Entity\Role;
+ use GuzzleHttp\RequestOptions;
+ 
+ /**
+- * Class LinkProviderTest.
++ * Tests the link provider.
+  *
+  * @group jsonapi_hypermedia
+  *
+@@ -84,8 +84,8 @@ final class LinkProviderTest extends BrowserTestBase {
+     ];
+     $this->linkManager = $this->container->get('jsonapi_hypermedia_provider.manager');
+     $this->state = $this->container->get('state');
+-    $this->account = $this->createUser();
+-    $this->container->set('current_user', $this->account);
++    $account = $this->createUser();
++    $this->container->set('current_user', $account);
+   }
+ 
+   /**
+@@ -324,7 +324,10 @@ final class LinkProviderTest extends BrowserTestBase {
+       ],
+       'article author relationship objects on individual documents' => [
+         [
+-          'link_context' => ['relationship_object' => ['node--article', 'uid'],
++          'link_context' => [
++            'relationship_object' => [
++              'node--article', 'uid',
++            ],
+           ],
+           'location' => 'data.relationships.uid.links',
+           'presence' => ['individual'],
+@@ -332,7 +335,10 @@ final class LinkProviderTest extends BrowserTestBase {
+       ],
+       'article bundle relationship objects on individual documents' => [
+         [
+-          'link_context' => ['relationship_object' => ['node--article', 'uid'],
++          'link_context' => [
++            'relationship_object' => [
++              'node--article', 'uid',
++            ],
+           ],
+           'location' => 'data.relationships.node_type.links',
+           'presence' => [],
+@@ -340,7 +346,10 @@ final class LinkProviderTest extends BrowserTestBase {
+       ],
+       'article author relationship objects on collection documents' => [
+         [
+-          'link_context' => ['relationship_object' => ['node--article', 'uid'],
++          'link_context' => [
++            'relationship_object' => [
++              'node--article', 'uid',
++            ],
+           ],
+           'location' => 'data.0.relationships.uid.links',
+           'presence' => ['collection'],
+@@ -348,7 +357,10 @@ final class LinkProviderTest extends BrowserTestBase {
+       ],
+       'article bundle relationship objects on collection documents' => [
+         [
+-          'link_context' => ['relationship_object' => ['node--article', 'uid'],
++          'link_context' => [
++            'relationship_object' => [
++              'node--article', 'uid',
++            ],
+           ],
+           'location' => 'data.0.relationships.node_type.links',
+           'presence' => [],
+@@ -356,7 +368,11 @@ final class LinkProviderTest extends BrowserTestBase {
+       ],
+       'article author relationship objects on relationship documents' => [
+         [
+-          'link_context' => ['relationship_object' => ['node--article', 'uid']],
++          'link_context' => [
++            'relationship_object' => [
++              'node--article', 'uid',
++            ],
++          ],
+           'location' => 'links',
+           'presence' => ['relationship'],
+         ],
