@@ -8,6 +8,7 @@ use Drupal\Core\Session\AnonymousUserSession;
 use Drupal\jsonapi_diff\JsonApiResource\DiffResourceObject;
 use Drupal\language\Entity\ConfigurableLanguage;
 use Drupal\node\NodeInterface;
+use Drupal\paragraphs\Entity\Paragraph;
 use Drupal\Tests\BrowserTestBase;
 use Drupal\Tests\jsonapi_diff\Traits\DiffContentTrait;
 use Drupal\user\Entity\Role;
@@ -120,10 +121,11 @@ class DiffResourceTest extends BrowserTestBase {
     $this->assertSame('jsonapi_diff--diff', $document['data']['type']);
     $this->assertSame($node->uuid() . ':1:2', $document['data']['id']);
     $this->assertSame('changed', $document['data']['attributes']['fields']['field_text']['status']);
-    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 1, 'same' => 3], $document['data']['attributes']['summary']);
+    // The text changed, and so did the block list, because a block was added.
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 2, 'same' => 3], $document['data']['attributes']['summary']);
     // One block was edited and one added, so the page changed by more than
     // its own fields report.
-    $this->assertSame(['added' => 1, 'removed' => 0, 'changed' => 2, 'same' => 5], $document['data']['attributes']['tree_summary']);
+    $this->assertSame(['added' => 1, 'removed' => 0, 'changed' => 3, 'same' => 5], $document['data']['attributes']['tree_summary']);
     $this->assertCount(4, $document['included']);
 
     $statuses = [];
@@ -211,7 +213,7 @@ class DiffResourceTest extends BrowserTestBase {
 
     $this->assertSession()->statusCodeEquals(200);
     $this->assertSame(['tree_summary'], array_keys($rollup['data']['attributes']));
-    $this->assertSame(['added' => 1, 'removed' => 0, 'changed' => 2, 'same' => 5], $rollup['data']['attributes']['tree_summary']);
+    $this->assertSame(['added' => 1, 'removed' => 0, 'changed' => 3, 'same' => 5], $rollup['data']['attributes']['tree_summary']);
     foreach ($rollup['included'] as $child) {
       $this->assertSame(['tree_summary'], array_keys($child['attributes']), $child['id']);
     }
@@ -285,7 +287,7 @@ class DiffResourceTest extends BrowserTestBase {
    * empty. PHP encodes an empty array as `[]`, so the raw body is read here
    * rather than a decoded document, which cannot tell the two apart.
    */
-  public function testReferenceOnlyParagraphReportsAnEmptyObject(): void {
+  public function testReferenceOnlyParagraphReportsItsListOnly(): void {
     $this->createGroupParagraphType();
     $this->container->get('router.builder')->rebuild();
     $group = $this->createGroup($this->createBlock('first block'));
@@ -299,18 +301,54 @@ class DiffResourceTest extends BrowserTestBase {
     $body = $this->drupalGet($this->path($node), [], self::HEADERS);
 
     $this->assertSession()->statusCodeEquals(200);
+    $document = json_decode($body, FALSE);
+    $diffs = array_values(array_filter($document->included, static fn (\stdClass $diff): bool => str_starts_with($diff->id, $group->uuid() . ':')));
+    $this->assertCount(1, $diffs);
+
+    // The group holds no text of its own. Its only entry is the reference
+    // field it recursed through, which reports whether the list changed.
+    $fields = get_object_vars($diffs[0]->attributes->fields);
+    $this->assertSame(['field_items'], array_keys($fields));
+    $this->assertSame('same', $fields['field_items']->status);
+    $this->assertSame('', $fields['field_items']->left);
+    $this->assertSame([], $fields['field_items']->ops);
+    $this->assertSame([], $fields['field_items']->items);
+
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 1], (array) $diffs[0]->attributes->summary);
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 2], (array) $diffs[0]->attributes->tree_summary);
+  }
+
+  /**
+   * An entity with no compared fields reports an object, not an array.
+   *
+   * A map encodes as a JSON array once it is empty, which is a different
+   * type to a client. A paragraph type with no fields is the one shape that
+   * still reaches an empty `fields`, so it guards the normalizer.
+   */
+  public function testAnEntityWithNoFieldsReportsAnEmptyObject(): void {
+    $this->createBareParagraphType();
+    $this->container->get('router.builder')->rebuild();
+    $bare = Paragraph::create(['type' => 'bare']);
+    $bare->save();
+    $node = $this->createArticle([
+      'field_text' => 'text',
+      'field_blocks' => $this->references($bare),
+      'uid' => $this->editor->id(),
+    ]);
+    $this->drupalLogin($this->editor);
+
+    $body = $this->drupalGet($this->path($node), [], self::HEADERS);
+
+    $this->assertSession()->statusCodeEquals(200);
     $this->assertStringContainsString('"fields":{}', $body);
     $this->assertStringNotContainsString('"fields":[]', $body);
 
     $document = json_decode($body, FALSE);
-    $diffs = array_values(array_filter($document->included, static fn (\stdClass $diff): bool => str_starts_with($diff->id, $group->uuid() . ':')));
+    $diffs = array_values(array_filter($document->included, static fn (\stdClass $diff): bool => str_starts_with($diff->id, $bare->uuid() . ':')));
     $this->assertCount(1, $diffs);
     $this->assertInstanceOf(\stdClass::class, $diffs[0]->attributes->fields);
     $this->assertSame([], get_object_vars($diffs[0]->attributes->fields));
-    // The group has nothing of its own, so the rollup is the block's alone.
-    $this->assertInstanceOf(\stdClass::class, $diffs[0]->attributes->tree_summary);
     $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 0], (array) $diffs[0]->attributes->summary);
-    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 1], (array) $diffs[0]->attributes->tree_summary);
   }
 
   /**
@@ -365,11 +403,14 @@ class DiffResourceTest extends BrowserTestBase {
 
     $this->assertSession()->statusCodeEquals(200);
     $this->assertStringNotContainsString('denied block', $body);
-    $this->assertStringContainsString('"summary":{"added":0,"removed":0,"changed":0,"same":4},"tree_summary":{"added":0,"removed":0,"changed":0,"same":5}', $body);
+    $this->assertStringContainsString('"summary":{"added":0,"removed":0,"changed":0,"same":5},"tree_summary":{"added":0,"removed":0,"changed":0,"same":6}', $body);
 
     $document = json_decode($body, TRUE);
     $this->assertCount(1, $document['included']);
-    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 5], $document['data']['attributes']['tree_summary']);
+    $this->assertSame(['added' => 0, 'removed' => 0, 'changed' => 0, 'same' => 6], $document['data']['attributes']['tree_summary']);
+    // The denied block was edited, and the reference field still reports the
+    // list as unchanged, so its status leaks nothing either.
+    $this->assertSame('same', $document['data']['attributes']['fields']['field_blocks']['status']);
     $this->assertSame($document['included'][0]['attributes']['summary'], $document['included'][0]['attributes']['tree_summary']);
   }
 
