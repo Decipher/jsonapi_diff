@@ -26,6 +26,13 @@ use Drupal\jsonapi_diff\Comparison\FieldDiff;
  * meta and the individual URL of that version as the `related` link.
  * `children` lists the diffs of the entities the comparison recursed into,
  * with each child's place in the parent recorded in its identifier's meta.
+ *
+ * A sparse fieldset needs nothing here. Core's resource object normalizer
+ * keeps the members the fieldset names and drops the rest, and it does that
+ * for every resource of the type, in `included` as well as in the primary
+ * data.
+ *
+ * @see \Drupal\jsonapi\Normalizer\ResourceObjectNormalizer::doNormalize()
  */
 final class DiffResourceObject extends ResourceObject {
 

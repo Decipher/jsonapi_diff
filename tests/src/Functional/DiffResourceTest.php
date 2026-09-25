@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\jsonapi_diff\Functional;
 
 use Drupal\Core\Session\AnonymousUserSession;
+use Drupal\jsonapi_diff\JsonApiResource\DiffResourceObject;
 use Drupal\language\Entity\ConfigurableLanguage;
 use Drupal\node\NodeInterface;
 use Drupal\Tests\BrowserTestBase;
@@ -130,6 +131,67 @@ class DiffResourceTest extends BrowserTestBase {
     $this->assertSame('moved', $statuses[$second->uuid()]);
     $this->assertSame('moved', $statuses[$third->uuid()]);
     $this->assertSame('added', $statuses[$fourth->uuid()]);
+  }
+
+  /**
+   * A sparse fieldset trims the members of every diff in the document.
+   */
+  public function testSparseFieldsetTrimsEveryDiff(): void {
+    [$node] = $this->createReshapedArticle(['uid' => $this->editor->id()]);
+    $this->drupalLogin($this->editor);
+
+    $whole = $this->fetch($this->path($node));
+    $this->assertSame(['summary', 'fields'], array_keys($whole['data']['attributes']));
+    $this->assertSame(['left', 'right', 'children'], array_keys($whole['data']['relationships']));
+
+    $document = $this->fetch($this->path($node), $this->fieldset('summary'));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $data = $document['data'];
+    $this->assertSame('jsonapi_diff--diff', $data['type']);
+    $this->assertSame($node->uuid() . ':1:2', $data['id']);
+    $this->assertSame(['summary'], array_keys($data['attributes']));
+    $this->assertArrayNotHasKey('relationships', $data);
+
+    // A fieldset belongs to a type, so it trims the children the same way.
+    $this->assertCount(4, $document['included']);
+    foreach ($document['included'] as $child) {
+      $this->assertSame(['summary'], array_keys($child['attributes']), $child['id']);
+      $this->assertArrayNotHasKey('relationships', $child);
+    }
+  }
+
+  /**
+   * A fieldset that names relationships keeps those and drops the rest.
+   */
+  public function testSparseFieldsetNamesRelationships(): void {
+    [$node] = $this->createReshapedArticle(['uid' => $this->editor->id()]);
+    $this->drupalLogin($this->editor);
+
+    $document = $this->fetch($this->path($node), $this->fieldset('left,children'));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertArrayNotHasKey('attributes', $document['data']);
+    $this->assertSame(['left', 'children'], array_keys($document['data']['relationships']));
+    $this->assertCount(4, $document['data']['relationships']['children']['data']);
+  }
+
+  /**
+   * An unknown member is ignored, which is what core's own route does.
+   */
+  public function testSparseFieldsetIgnoresAnUnknownMember(): void {
+    $node = $this->createArticle(['field_text' => 'text', 'uid' => $this->editor->id()]);
+    $this->drupalLogin($this->editor);
+
+    $document = $this->fetch($this->path($node), $this->fieldset('summary,nope'));
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertSame(['summary'], array_keys($document['data']['attributes']));
+
+    $core = $this->fetch('/jsonapi/node/article/' . $node->uuid(), ['fields' => ['node--article' => 'title,nope']]);
+
+    $this->assertSession()->statusCodeEquals(200);
+    $this->assertSame(['title'], array_keys($core['data']['attributes']));
   }
 
   /**
@@ -335,6 +397,29 @@ class DiffResourceTest extends BrowserTestBase {
   }
 
   /**
+   * Two sparse fieldsets are cached separately.
+   */
+  public function testFieldsetsAreCachedSeparately(): void {
+    $node = $this->revise($this->createArticle(['field_text' => 'one', 'uid' => $this->editor->id()]), ['field_text' => 'two']);
+    $this->drupalLogin($this->publisher);
+    $query = ['leftVersion' => 'id:1', 'rightVersion' => 'id:2'];
+
+    $summary = $this->fetch($this->path($node), $query + $this->fieldset('summary'));
+    $this->assertSession()->responseHeaderEquals('X-Drupal-Dynamic-Cache', 'MISS');
+    $this->assertArrayHasKey('summary', $summary['data']['attributes']);
+    $this->assertArrayNotHasKey('fields', $summary['data']['attributes']);
+
+    $fields = $this->fetch($this->path($node), $query + $this->fieldset('fields'));
+    $this->assertSession()->responseHeaderEquals('X-Drupal-Dynamic-Cache', 'MISS');
+    $this->assertArrayHasKey('fields', $fields['data']['attributes']);
+    $this->assertArrayNotHasKey('summary', $fields['data']['attributes']);
+
+    $repeat = $this->fetch($this->path($node), $query + $this->fieldset('summary'));
+    $this->assertSession()->responseHeaderEquals('X-Drupal-Dynamic-Cache', 'HIT');
+    $this->assertSame($summary, $repeat);
+  }
+
+  /**
    * Behind a language prefix both sides are compared in that language.
    */
   public function testTranslatedPair(): void {
@@ -371,12 +456,26 @@ class DiffResourceTest extends BrowserTestBase {
   }
 
   /**
+   * Builds the query parameter of a sparse fieldset on the diff type.
+   *
+   * @param string $members
+   *   The member names, comma separated.
+   *
+   * @return array<string, array<string, string>>
+   *   The query parameter.
+   */
+  protected function fieldset(string $members): array {
+    return ['fields' => [DiffResourceObject::TYPE_NAME => $members]];
+  }
+
+  /**
    * Fetches a JSON:API document as the current session's user.
    *
    * @param string $path
    *   The path, or an absolute URL from a link.
-   * @param array<string, string> $query
-   *   The query parameters.
+   * @param array<string, string|array<string, string>> $query
+   *   The query parameters. A nested array is a bracketed parameter, as a
+   *   sparse fieldset is.
    *
    * @return array<string, mixed>
    *   The decoded document, or an empty array when the body is not JSON.

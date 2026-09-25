@@ -84,9 +84,17 @@ final class DiffResource extends ResourceBase implements ContainerInjectionInter
       throw new \LogicException('The diff route defines exactly one resource type.');
     }
 
+    // The response is built here rather than by
+    // ResourceBase::createJsonapiResponse(), because that factory resolves
+    // `?include` against entity reference fields and this document is
+    // already complete. The contexts that factory adds are therefore
+    // declared here. `url.query_args:fields` is one of them, because a
+    // sparse fieldset changes the document. `url.query_args:include` is not,
+    // because this route ignores `include`.
     $cacheability = (new CacheableMetadata())->addCacheContexts([
       'url.query_args:leftVersion',
       'url.query_args:rightVersion',
+      'url.query_args:fields',
       'user.permissions',
       'languages:language_content',
     ]);
