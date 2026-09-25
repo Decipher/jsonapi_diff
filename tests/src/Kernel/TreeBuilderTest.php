@@ -326,6 +326,65 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * A recursed reference field reports whether its list changed.
+   *
+   * Diff hands a recursed field's targets to the recursion instead of
+   * building a value, so the field has no entry of its own in the parse.
+   * Without the synthesised entry a draft that only reordered its blocks
+   * reaches no count anywhere, and the root reports nothing changed.
+   */
+  public function testReorderReachesTheSummary(): void {
+    $first = $this->createParagraph('block', ['field_body' => 'first']);
+    $second = $this->createParagraph('block', ['field_body' => 'second']);
+    $node = $this->createNode(['field_blocks' => $this->references($first, $second)]);
+    $this->reviseParagraph($first);
+    $this->reviseParagraph($second);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($second, $first)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    // Every block kept its text, so the only change is the list itself.
+    $this->assertSame(FieldDiff::CHANGED, $diff->fields['field_blocks']->status);
+    $this->assertSame('', $diff->fields['field_blocks']->left);
+    $this->assertSame([], $diff->fields['field_blocks']->items);
+    $this->assertSame(1, $diff->summary[FieldDiff::CHANGED]);
+    $this->assertSame(1, $diff->treeSummary[FieldDiff::CHANGED]);
+  }
+
+  /**
+   * A list left alone reports the reference field as the same.
+   */
+  public function testAnUnchangedListReportsTheFieldAsSame(): void {
+    $block = $this->createParagraph('block', ['field_body' => 'first']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($block)]);
+    [$left, $right] = $this->revise($node, ['field_text' => 'changed text']);
+
+    $diff = $this->builder->build($left, $right);
+
+    // The block stayed where it was, so the list is the same even though
+    // the node's own text changed.
+    $this->assertSame(FieldDiff::SAME, $diff->fields['field_blocks']->status);
+    $this->assertSame(FieldDiff::CHANGED, $diff->fields['field_text']->status);
+    $this->assertSame(1, $diff->summary[FieldDiff::CHANGED]);
+  }
+
+  /**
+   * An edit inside a block leaves the list alone, so nothing counts twice.
+   */
+  public function testAnEditInsideBlockLeavesTheListSame(): void {
+    $block = $this->createParagraph('block', ['field_body' => 'before']);
+    $node = $this->createNode(['field_blocks' => $this->references($block)]);
+    $this->reviseParagraph($block, ['field_body' => 'after']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($block)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertSame(FieldDiff::SAME, $diff->fields['field_blocks']->status);
+    // One changed field, in the block, counted once in the rollup.
+    $this->assertSame(1, $diff->treeSummary[FieldDiff::CHANGED]);
+  }
+
+  /**
    * Swapped blocks are moved, and their own fields are the same.
    */
   public function testSwappedBlocksAreMoved(): void {
