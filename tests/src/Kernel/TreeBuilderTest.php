@@ -145,6 +145,187 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * One changed item among unchanged ones is reported on its own.
+   *
+   * This is the case the whole-field status cannot express. The field is
+   * `changed`, and only the item at delta 1 is.
+   */
+  public function testOneChangedItemAmongUnchangedItems(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two', 'three']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['one', 'two changed', 'three']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::SAME,
+      1 => FieldDiff::CHANGED,
+      2 => FieldDiff::SAME,
+    ], $this->itemStatuses($field));
+    $changed = $field->items[1];
+    $this->assertSame(1, $changed->delta);
+    $this->assertSame('two', $changed->left);
+    $this->assertSame('two changed', $changed->right);
+    $this->assertSame([
+      ['type' => '-', 'lines' => ['two']],
+      ['type' => '+', 'lines' => ['two changed']],
+    ], $changed->ops);
+    $this->assertSame([['type' => '=', 'lines' => ['three']]], $field->items[2]->ops);
+  }
+
+  /**
+   * An item the right side gained is added, the rest unchanged.
+   */
+  public function testMultiValueFieldItemAdded(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['one', 'two', 'three']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::SAME,
+      1 => FieldDiff::SAME,
+      2 => FieldDiff::ADDED,
+    ], $this->itemStatuses($field));
+    $added = $field->items[2];
+    $this->assertSame('', $added->left);
+    $this->assertSame('three', $added->right);
+    $this->assertSame([['type' => '+', 'lines' => ['three']]], $added->ops);
+  }
+
+  /**
+   * An item the right side dropped from the end is removed.
+   */
+  public function testMultiValueFieldItemRemoved(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two', 'three']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['one', 'two']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::SAME,
+      1 => FieldDiff::SAME,
+      2 => FieldDiff::REMOVED,
+    ], $this->itemStatuses($field));
+    $removed = $field->items[2];
+    $this->assertSame('three', $removed->left);
+    $this->assertSame('', $removed->right);
+    $this->assertSame([['type' => '-', 'lines' => ['three']]], $removed->ops);
+  }
+
+  /**
+   * One item changed and another added are two statuses in one field.
+   */
+  public function testMultiValueFieldItemChangedAndAnotherAdded(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['one changed', 'two', 'three']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::CHANGED,
+      1 => FieldDiff::SAME,
+      2 => FieldDiff::ADDED,
+    ], $this->itemStatuses($field));
+  }
+
+  /**
+   * A field of cardinality one carries the item at delta 0.
+   *
+   * Every field has items, so a client iterates them without asking the
+   * field's cardinality first, and delta 0 addresses the value.
+   */
+  public function testSingleValueFieldCarriesOneItem(): void {
+    [$left, $right] = $this->revise($this->createNode(['field_text' => 'first draft']), ['field_text' => 'second draft']);
+
+    $field = $this->builder->build($left, $right)->fields['field_text'];
+
+    $this->assertCount(1, $field->items);
+    $item = $field->items[0];
+    $this->assertSame(0, $item->delta);
+    $this->assertSame(FieldDiff::CHANGED, $item->status);
+    $this->assertSame('first draft', $item->left);
+    $this->assertSame('second draft', $item->right);
+    $this->assertSame($field->ops, $item->ops);
+  }
+
+  /**
+   * Items align by delta, so dropping the first item shifts the rest.
+   *
+   * A delta is a position, not an identity. The left side holds three items
+   * and the right side holds the third one only. Aligning by position pairs
+   * `one` with `three` and reports the two trailing positions as removed. A
+   * reader looking for "two items removed from the front" does not get it,
+   * because a field item carries nothing to match it on across revisions.
+   */
+  public function testSidesWithDifferentCountsAlignByPosition(): void {
+    $node = $this->createNode(['field_lines' => ['one', 'two', 'three']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['three']]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame(FieldDiff::CHANGED, $field->status);
+    $this->assertSame([
+      0 => FieldDiff::CHANGED,
+      1 => FieldDiff::REMOVED,
+      2 => FieldDiff::REMOVED,
+    ], $this->itemStatuses($field));
+    $this->assertSame('one', $field->items[0]->left);
+    $this->assertSame('three', $field->items[0]->right);
+  }
+
+  /**
+   * An item's operations cover that item's lines and no other item's.
+   *
+   * Both items hold two lines. The whole field's operations read the four
+   * lines as one text. Each item's operations stop at the item.
+   */
+  public function testItemOpsCoverOneItemOnly(): void {
+    $node = $this->createNode(['field_lines' => ["one\ntwo", "three\nfour"]]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ["one\ntwo", "three\nfive"]]);
+
+    $field = $this->builder->build($left, $right)->fields['field_lines'];
+
+    $this->assertSame([
+      ['type' => '=', 'lines' => ['one', 'two', 'three']],
+      ['type' => '-', 'lines' => ['four']],
+      ['type' => '+', 'lines' => ['five']],
+    ], $field->ops);
+    $this->assertSame([['type' => '=', 'lines' => ['one', 'two']]], $field->items[0]->ops);
+    $this->assertSame([
+      ['type' => '=', 'lines' => ['three']],
+      ['type' => '-', 'lines' => ['four']],
+      ['type' => '+', 'lines' => ['five']],
+    ], $field->items[1]->ops);
+    $this->assertSame(FieldDiff::SAME, $field->items[0]->status);
+    $this->assertSame(FieldDiff::CHANGED, $field->items[1]->status);
+  }
+
+  /**
+   * A field denied on one side only is absent from both, with no items.
+   *
+   * The access rule the module takes itself judges every side. The left
+   * side of this field is viewable and the right side is not, so neither
+   * side is served and no item leaks the value the reader may see.
+   */
+  public function testFieldDeniedOnOneSideIsAbsentFromBoth(): void {
+    $node = $this->createNode(['field_text' => 'text', 'field_lines' => ['visible one']]);
+    [$left, $right] = $this->revise($node, ['field_lines' => ['visible one', TestAccess::RESTRICTED_VALUE]]);
+    $this->assertTrue($left->get('field_lines')->access('view'));
+    $this->assertFalse($right->get('field_lines')->access('view'));
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertArrayNotHasKey('field_lines', $diff->fields);
+    $this->assertStringNotContainsString('visible one', $this->values($diff));
+    $this->assertSame(count($diff->fields), array_sum($diff->summary));
+    $this->assertContains(TestAccess::CACHE_TAG, $diff->cacheability->getCacheTags());
+  }
+
+  /**
    * Swapped blocks are moved, and their own fields are the same.
    */
   public function testSwappedBlocksAreMoved(): void {
@@ -302,6 +483,126 @@ class TreeBuilderTest extends KernelTestBase {
     $this->assertArrayHasKey('field_text', $diff->fields);
     $this->assertSame(1, $diff->summary['changed']);
     $this->assertSame(count($diff->fields), array_sum($diff->summary));
+  }
+
+  /**
+   * The tree summary reports a change the entity's own summary misses.
+   *
+   * Nothing on the node changed. One paragraph's text did. The node's own
+   * summary is therefore all `same`, which is the case a client reading it
+   * to ask "did this page change" gets wrong.
+   */
+  public function testTreeSummaryReportsWhatTheSummaryMisses(): void {
+    $block = $this->createParagraph('block', ['field_body' => 'body']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($block)]);
+    $this->reviseParagraph($block, ['field_body' => 'body, edited']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($block)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $child = $this->childFor($diff, $block);
+    $this->assertSame(FieldDiff::CHANGED, $child->diff->fields['field_body']->status);
+    $this->assertSame(0, $diff->summary['changed']);
+    $this->assertSame(count($diff->fields), $diff->summary['same']);
+    $this->assertSame(1, $diff->treeSummary['changed']);
+    $this->assertSame($diff->summary['same'] + $child->diff->summary['same'], $diff->treeSummary['same']);
+    $this->assertSame(array_sum($diff->summary) + array_sum($child->diff->summary), array_sum($diff->treeSummary));
+  }
+
+  /**
+   * A change on the node and one in a block are both in the tree summary.
+   */
+  public function testTreeSummaryCountsTheEntityAndItsChildren(): void {
+    $block = $this->createParagraph('block', ['field_body' => 'body']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($block)]);
+    $this->reviseParagraph($block, ['field_body' => 'body, edited']);
+    [$left, $right] = $this->revise($node, ['field_text' => 'text, edited', 'field_blocks' => $this->references($block)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertSame(1, $diff->summary['changed']);
+    $this->assertSame(2, $diff->treeSummary['changed']);
+  }
+
+  /**
+   * The sum reaches a paragraph inside a paragraph.
+   */
+  public function testTreeSummaryIsRecursive(): void {
+    $inner = $this->createParagraph('block', ['field_body' => 'inner']);
+    $group = $this->createParagraph('group', ['field_items' => $this->references($inner)]);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($group)]);
+    $this->reviseParagraph($inner, ['field_body' => 'inner changed']);
+    $this->reviseParagraph($group, ['field_items' => $this->references($inner)]);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($group)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $group_diff = $this->childFor($diff, $group)->diff;
+    $inner_diff = $this->childFor($group_diff, $inner)->diff;
+    $this->assertSame(1, $inner_diff->summary['changed']);
+    $this->assertSame(0, $group_diff->summary['changed']);
+    $this->assertSame(1, $group_diff->treeSummary['changed']);
+    $this->assertSame(0, $diff->summary['changed']);
+    $this->assertSame(1, $diff->treeSummary['changed']);
+  }
+
+  /**
+   * An entity with no children has the same two summaries.
+   */
+  public function testTreeSummaryOfLeafIsItsSummary(): void {
+    $block = $this->createParagraph('block', ['field_body' => 'body']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($block)]);
+    $this->reviseParagraph($block, ['field_body' => 'body, edited']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($block)]);
+
+    $leaf = $this->childFor($this->builder->build($left, $right), $block)->diff;
+
+    $this->assertSame([], $leaf->children);
+    $this->assertSame($leaf->summary, $leaf->treeSummary);
+  }
+
+  /**
+   * An added and a removed block count their fields in the rollup.
+   */
+  public function testTreeSummaryCountsAddedAndRemovedChildren(): void {
+    $kept = $this->createParagraph('block', ['field_body' => 'kept']);
+    $removed = $this->createParagraph('block', ['field_body' => 'old']);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($kept, $removed)]);
+    $this->reviseParagraph($kept);
+    $added = $this->createParagraph('block', ['field_body' => 'new']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($kept, $added)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $added_diff = $this->childFor($diff, $added)->diff;
+    $removed_diff = $this->childFor($diff, $removed)->diff;
+    $this->assertSame(0, $diff->summary['added']);
+    $this->assertSame(0, $diff->summary['removed']);
+    $this->assertSame(count($added_diff->fields), $diff->treeSummary['added']);
+    $this->assertSame(count($removed_diff->fields), $diff->treeSummary['removed']);
+    $this->assertSame(
+      $diff->summary['same'] + $this->childFor($diff, $kept)->diff->summary['same'],
+      $diff->treeSummary['same'],
+    );
+  }
+
+  /**
+   * A child the user may not view is counted nowhere in the rollup.
+   */
+  public function testDeniedChildIsNotCountedInTheTreeSummary(): void {
+    $shown = $this->createParagraph('block', ['field_body' => 'shown body']);
+    $denied = $this->createParagraph('block', ['field_body' => 'denied body', 'status' => 0]);
+    $node = $this->createNode(['field_text' => 'text', 'field_blocks' => $this->references($shown, $denied)]);
+    $this->reviseParagraph($shown);
+    $this->reviseParagraph($denied, ['field_body' => 'denied body, edited']);
+    [$left, $right] = $this->revise($node, ['field_blocks' => $this->references($shown, $denied)]);
+
+    $diff = $this->builder->build($left, $right);
+
+    $shown_diff = $this->childFor($diff, $shown)->diff;
+    $this->assertCount(1, $diff->children);
+    $this->assertSame(0, $diff->treeSummary['changed']);
+    $this->assertSame(array_sum($diff->summary) + array_sum($shown_diff->summary), array_sum($diff->treeSummary));
   }
 
   /**
@@ -558,6 +859,20 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * Lists the status of each of a field's items, keyed by delta.
+   *
+   * @return array<int, string>
+   *   The statuses.
+   */
+  protected function itemStatuses(FieldDiff $field): array {
+    $statuses = [];
+    foreach ($field->items as $item) {
+      $statuses[$item->delta] = $item->status;
+    }
+    return $statuses;
+  }
+
+  /**
    * Collects every compared value in a tree, at any depth.
    */
   protected function values(EntityDiff $diff): string {
@@ -566,6 +881,10 @@ class TreeBuilderTest extends KernelTestBase {
       $values[] = $field->label;
       $values[] = $field->left;
       $values[] = $field->right;
+      foreach ($field->items as $item) {
+        $values[] = $item->left;
+        $values[] = $item->right;
+      }
     }
     foreach ($diff->children as $child) {
       $values[] = $this->values($child->diff);

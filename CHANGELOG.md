@@ -33,6 +33,17 @@ changed without rendering Drupal's admin theme.
 - `attributes.fields`, keyed by JSON:API public field name, with each field's
   label, status, both values and plain line operations, beside an
   `attributes.summary` counting the entity's own fields by status.
+- `items` on every field entry, reporting a delta, a status, both values and
+  that item's own line operations per item of the field. A gallery with one
+  image swapped names the image, so a comparison UI highlights the item rather
+  than the whole field. A field of cardinality one reports one item at delta 0,
+  and the field's own status agrees with its items by construction. `summary`
+  and `tree_summary` go on counting fields, not items.
+- `attributes.tree_summary`, the same four counts for the entity and every
+  entity below it. `summary` answers "did this entity change" and
+  `tree_summary` answers "did this entity or anything inside it change", which
+  on a page built from paragraphs is the question a comparison UI asks. An
+  entity dropped from the document for access reasons is counted in no rollup.
 - Access per side from core JSON:API's own decision for that revision, including
   content moderation's latest-version rule. Either side denied is a `403` for
   the whole diff, and the module adds no permission of its own.
@@ -43,7 +54,7 @@ changed without rendering Drupal's admin theme.
   JSON:API Hypermedia, present only when the user could follow it. The route
   works without that module.
 - JSON:API sparse fieldsets on the diff type, so
-  `?fields[jsonapi_diff--diff]=summary` returns the counts alone. A fieldset
+  `?fields[jsonapi_diff--diff]=tree_summary` returns the counts alone. A fieldset
   trims every diff in the document, the nested ones as well as the primary data,
   and two fieldsets are cached separately.
 
@@ -51,8 +62,9 @@ changed without rendering Drupal's admin theme.
 
 - Nested entities are matched by entity id, so a workflow that creates new
   paragraph entities per draft reports every block as removed and added.
-- A multi-value field is reported with one status for the whole field, because
-  Diff joins its values into one string.
+- A field's items are paired by delta, because a field item carries no id. An
+  item inserted before another shifts it, so the positions after an insertion
+  read as changed rather than as one insertion.
 - A reference field that recurses appears as `children` and has no entry of its
   own in `fields`.
 - A sparse fieldset trims a resource's members and not the tree, so there is no

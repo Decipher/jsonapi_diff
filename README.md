@@ -156,6 +156,7 @@ depth, so one request returns the whole tree.
 | `type` | Always `jsonapi_diff--diff` |
 | `id` | `{entity uuid}:{left revision id}:{right revision id}` |
 | `attributes.summary` | The entity's own fields counted by status |
+| `attributes.tree_summary` | The same counts for this entity and everything below it |
 | `attributes.fields` | One entry per compared field, keyed by JSON:API public name |
 | `relationships.left` | The compared entity at the left version |
 | `relationships.right` | The compared entity at the right version |
@@ -182,22 +183,52 @@ and one of the four `included` resources:
     },
     "attributes": {
       "summary": { "added": 0, "removed": 0, "changed": 1, "same": 3 },
+      "tree_summary": { "added": 1, "removed": 0, "changed": 2, "same": 5 },
       "fields": {
         "uid": {
           "label": "Authored by",
           "status": "same",
           "left": "admin",
           "right": "admin",
-          "ops": [{ "type": "=", "lines": ["admin"] }]
+          "ops": [{ "type": "=", "lines": ["admin"] }],
+          "items": [
+            {
+              "delta": 0,
+              "status": "same",
+              "left": "admin",
+              "right": "admin",
+              "ops": [{ "type": "=", "lines": ["admin"] }]
+            }
+          ]
         },
-        "title": {
-          "label": "Title",
+        "field_tags": {
+          "label": "Tags",
           "status": "changed",
-          "left": "Diff demo article",
-          "right": "Diff demo article (draft)",
+          "left": "Drupal\nJSON:API",
+          "right": "Drupal\nDecoupled",
           "ops": [
-            { "type": "-", "lines": ["Diff demo article"] },
-            { "type": "+", "lines": ["Diff demo article (draft)"] }
+            { "type": "=", "lines": ["Drupal"] },
+            { "type": "-", "lines": ["JSON:API"] },
+            { "type": "+", "lines": ["Decoupled"] }
+          ],
+          "items": [
+            {
+              "delta": 0,
+              "status": "same",
+              "left": "Drupal",
+              "right": "Drupal",
+              "ops": [{ "type": "=", "lines": ["Drupal"] }]
+            },
+            {
+              "delta": 1,
+              "status": "changed",
+              "left": "JSON:API",
+              "right": "Decoupled",
+              "ops": [
+                { "type": "-", "lines": ["JSON:API"] },
+                { "type": "+", "lines": ["Decoupled"] }
+              ]
+            }
           ]
         }
       }
@@ -270,6 +301,7 @@ and one of the four `included` resources:
       },
       "attributes": {
         "summary": { "added": 0, "removed": 0, "changed": 1, "same": 0 },
+        "tree_summary": { "added": 0, "removed": 0, "changed": 1, "same": 0 },
         "fields": {
           "field_body": {
             "label": "Body",
@@ -279,6 +311,18 @@ and one of the four `included` resources:
             "ops": [
               { "type": "-", "lines": ["first block"] },
               { "type": "+", "lines": ["first block, edited in the draft"] }
+            ],
+            "items": [
+              {
+                "delta": 0,
+                "status": "changed",
+                "left": "first block",
+                "right": "first block, edited in the draft",
+                "ops": [
+                  { "type": "-", "lines": ["first block"] },
+                  { "type": "+", "lines": ["first block, edited in the draft"] }
+                ]
+              }
             ]
           }
         }
@@ -373,16 +417,79 @@ Diff's order and not the resource type's.
 | `left` | The left value as one string |
 | `right` | The right value as one string |
 | `ops` | Line operations from `left` to `right` |
+| `items` | The same four, per item of the field |
 
 Each entry in `ops` is `{"type": ..., "lines": [...]}`, where `type` is `=` for
 carried lines, `-` for removed and `+` for added, and `lines` holds them in
 order with no markup. A changed line arrives as a `-` followed by a `+`, which
 is the pair a client needs to run its own word diff over the change.
 
+### The items of a field
+
+`items` reports the same comparison per item, so a client can narrow a change to
+the item that carries it rather than highlighting the whole field. It is a JSON
+array in delta order, and each entry is:
+
+| Key | Holds |
+| --- | --- |
+| `delta` | The item's position in the field, on both sides |
+| `status` | `added`, `removed`, `changed` or `same` |
+| `left` | That item's left value |
+| `right` | That item's right value |
+| `ops` | Line operations from that item's `left` to its `right` |
+
+The `ops` of an item have the same three types as a field's, and cover that item
+only, so a field of two multi-line values gives each value its own operations
+instead of one run over the joined text.
+
+Every field has items, whatever its cardinality: a field of cardinality one
+reports one item at delta 0. A client iterates `items` without first asking how
+many values the field takes, and `entity uuid` plus public field name plus
+`delta` addresses any change in the document.
+
+A field's own `status` follows from its items. One status shared by every item
+is the field's status, and a mix of statuses is `changed`. The two can never
+disagree: a field reported as `same` has no item that is not, and a field
+reported as `changed` has at least one item that is not `same`.
+
+`summary` and `tree_summary` count fields, not items. A field with ten items and
+one change counts as one `changed` field in both.
+
+The two sides' items are paired by delta, which is a position and not an
+identity. See the limitation below for what that cannot tell you.
+
+### Summary and tree summary
+
+The same four counts appear twice on a diff, under two names that answer
+different questions.
+
+| Attribute | Answers |
+| --- | --- |
+| `summary` | Did this entity's own fields change |
+| `tree_summary` | Did this entity or anything below it change |
+
 `attributes.summary` counts the entity's own fields by status. It counts only
 what is present, so a field dropped by JSON:API or by field access is not in the
 totals, and the four counts always add up to the number of entries in `fields`.
 Children are not counted, because each child has a summary of its own.
+
+`attributes.tree_summary` adds every descendant's counts to those, to any depth.
+On the root it answers "did this page change", which is the question a
+comparison UI asks, and on a page whose text lives in paragraphs the two
+summaries differ: a draft that only edited a block leaves `summary` all `same`
+and reports the edit in `tree_summary`. On a child it answers "did this block
+change", counting the block and anything nested inside it.
+
+`tree_summary` counts what is in the document and nothing else. A child the user
+may not view is absent from the document, and so is a child of a resource type
+JSON:API does not expose. No rollup above them counts their fields. On an entity
+with no children the two attributes are equal.
+
+Reach for `tree_summary` on a child rather than `children[].meta.status`. The
+`meta` status is about the reference: whether that block was added, removed,
+moved or left where it was. A block whose text was rewritten in place keeps its
+id and its position, so its `meta.status` is `same` while its own
+`tree_summary` reports the change.
 
 ### Asking for less
 
@@ -391,15 +498,16 @@ counts and nothing else asks for them:
 
 ```bash
 curl -H 'Accept: application/vnd.api+json' \
-  'https://example.com/jsonapi/diff/node/article/85924444-4579-493c-8658-e654df08ff08?fields%5Bjsonapi_diff--diff%5D=summary'
+  'https://example.com/jsonapi/diff/node/article/85924444-4579-493c-8658-e654df08ff08?fields%5Bjsonapi_diff--diff%5D=tree_summary'
 ```
 
 The fieldset names members of the diff resource, in any combination:
 
 | Member | Holds |
 | --- | --- |
-| `summary` | The counts |
-| `fields` | Every compared field, with both sides and the line operations |
+| `summary` | The counts for the entity's own fields |
+| `tree_summary` | The counts for the entity and everything below it |
+| `fields` | Every compared field, with both sides, the line operations and the items |
 | `left`, `right` | The compared entity at each version |
 | `children` | The identifiers of the nested diffs |
 
@@ -444,8 +552,13 @@ const byId = new Map(
 function walk(diff, depth = 0) {
   const pad = '  '.repeat(depth)
   for (const [name, field] of Object.entries(diff.attributes.fields)) {
-    if (field.status !== 'same') {
-      console.log(`${pad}${name}: ${field.status}`)
+    if (field.status === 'same') {
+      continue
+    }
+    // The items narrow a change to the value that carries it, so a gallery
+    // with one new image highlights one image and not the whole field.
+    for (const item of field.items.filter((item) => item.status !== 'same')) {
+      console.log(`${pad}${name}[${item.delta}]: ${item.status}`)
     }
   }
   for (const child of diff.relationships.children.data) {
@@ -457,10 +570,11 @@ function walk(diff, depth = 0) {
 walk(doc.data)
 ```
 
-`attributes.summary` answers "did anything change here" without the walk, but it
-counts one entity's own fields and not its children, so a root whose summary is
-all `same` can still hold a changed paragraph. Walk the tree, or sum the
-summaries of everything in `included` as well.
+A client that only needs to know whether anything changed does not need the walk
+at all. `attributes.tree_summary` on the primary data already holds the counts
+for the whole tree, so a root whose `tree_summary` is all `same` has no change
+anywhere in it, paragraphs included. Walk the tree when you want to show what
+changed and where. Read `tree_summary` when you want the answer.
 
 ## Access
 
@@ -475,7 +589,10 @@ revision reaches the client. A label-only view counts as a denial too,
 since a diff of one would disclose the fields the label hides.
 
 Per-field view access applies inside the tree. A field the user may not view is
-absent from that entity's `fields` and is not counted in its `summary`.
+absent from that entity's `fields` and is not counted in its `summary`. An
+entity the user may not view is dropped from the document. No `tree_summary`
+above it counts its fields, so the rollup never reports a change the reader
+cannot be shown.
 
 An entity that does not exist is a `404` whatever the user's access, so the
 route cannot be used to learn that an entity exists.
@@ -639,20 +756,27 @@ and save a new revision of it rather than creating a replacement. Positional
 alignment, for the cases where that is impossible, is a candidate for a later
 release.
 
-### A multi-value field has one status for the whole field
+### A field's items are matched by position
 
-Diff joins a field's values into one string, one value per line, before
-comparing. This module reports one status, one `left`, one `right` and one `ops`
-list for the field as a whole. So a gallery of six images with one image swapped
-is one `changed` field, not five `same` items beside one `changed` item.
+`items` pairs the two sides by delta, because a delta is all a field item has.
+Unlike a referenced entity, an item carries no id that survives a save, so there
+is nothing else to match it on.
 
-`ops` still shows which line moved, so a client can work out which value changed
-by matching lines back to deltas. That holds when a value renders as one line,
-which most do, and it breaks down when a value renders as several.
+That reports an edit in place exactly: a gallery of six images with the fourth
+swapped is five `same` items and one `changed` item. It reports an insertion
+less well. An item added at the front shifts every item after it, so each
+position now holds the item that used to sit before it, and the field reads as a
+run of `changed` items with one `added` at the end. Nothing was lost, but the
+report says "these positions changed" where a reader wanted "one item was
+inserted here".
 
-**What to do:** read `ops` rather than the field status when per-value detail
-matters, and read `changed` on a multi-value field as "something in here
-changed".
+Appending and truncating are unaffected, because neither shifts an existing
+position.
+
+**What to do:** for content where insertion order matters and the items are
+substantial, model the items as referenced entities. Those are matched by entity
+id under `children`, which survives reordering, and each one then reports
+`added`, `removed` or `moved` on its own.
 
 ### A recursed reference field has no entry of its own
 
@@ -717,9 +841,17 @@ open for additional keys.
 **A:** Because the client this was built for needs the text anyway to render the
 page, so sending it once with the diff saves a second request. It does make a
 large tree a large payload. A client that does not need the text asks for
-`fields[jsonapi_diff--diff]=summary,children` and walks the tree on the counts,
-then fetches the one diff it wants to show in full. A fieldset cannot keep
-`fields` and drop the entries whose status is `same`.
+`fields[jsonapi_diff--diff]=tree_summary,children` and walks the tree on the
+counts, then fetches the one diff it wants to show in full. A fieldset cannot
+keep `fields` and drop the entries whose status is `same`.
+
+**Q: How do I tell whether a page changed at all?**
+
+**A:** Read `attributes.tree_summary` on the primary data. It counts the node's
+own fields and every paragraph below it, so one set of counts answers the
+question. The `attributes.summary` beside it counts the node's own fields alone,
+which on a page built from paragraphs is usually not what a comparison UI is
+asking.
 
 **Q: Can I diff a paragraph on its own?**
 

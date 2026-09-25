@@ -11,6 +11,8 @@ use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Access\AccessResultInterface;
 use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Field\FieldDefinitionInterface;
+use Drupal\Core\Field\FieldItemListInterface;
+use Drupal\Core\Session\AccountInterface;
 use Drupal\jsonapi_diff_test\TestAccess;
 use Drupal\jsonapi_diff_test\TestParagraphAccessControlHandler;
 
@@ -26,8 +28,10 @@ function jsonapi_diff_test_entity_type_alter(array &$entity_types): void {
 
 /**
  * Implements hook_entity_field_access().
+ *
+ * @phpstan-param \Drupal\Core\Field\FieldItemListInterface<\Drupal\Core\Field\FieldItemInterface>|null $items
  */
-function jsonapi_diff_test_entity_field_access(string $operation, FieldDefinitionInterface $field_definition): AccessResultInterface {
+function jsonapi_diff_test_entity_field_access(string $operation, FieldDefinitionInterface $field_definition, AccountInterface $account, ?FieldItemListInterface $items = NULL): AccessResultInterface {
   if ($operation !== 'view') {
     return AccessResult::neutral();
   }
@@ -35,7 +39,9 @@ function jsonapi_diff_test_entity_field_access(string $operation, FieldDefinitio
   // that decided it. A neutral result carries the same metadata, because
   // the rule ran either way. This is what a contributed per-field access
   // module does.
-  $result = $field_definition->getName() === TestAccess::RESTRICTED_FIELD
+  $forbidden = $field_definition->getName() === TestAccess::RESTRICTED_FIELD
+    || ($items instanceof FieldItemListInterface && str_contains($items->getString(), TestAccess::RESTRICTED_VALUE));
+  $result = $forbidden
     ? AccessResult::forbidden('The field is restricted for testing.')
     : AccessResult::neutral();
   return $result->addCacheTags([TestAccess::CACHE_TAG])->cachePerUser();

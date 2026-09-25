@@ -17,11 +17,15 @@ use Drupal\jsonapi\ResourceType\ResourceTypeRelationship;
 use Drupal\jsonapi_diff\Comparison\ChildDiff;
 use Drupal\jsonapi_diff\Comparison\EntityDiff;
 use Drupal\jsonapi_diff\Comparison\FieldDiff;
+use Drupal\jsonapi_diff\Comparison\ItemDiff;
 
 /**
  * The JSON:API resource object of one entity's diff.
  *
- * The shape is fixed here. `summary` and `fields` are attributes. `left` and
+ * The shape is fixed here. `summary`, `tree_summary` and `fields` are
+ * attributes. `summary` counts this entity's own fields and `tree_summary`
+ * counts the whole subtree below it, which is the count a page made of
+ * paragraphs needs. `left` and
  * `right` point at the compared entity, with the version in the identifier's
  * meta and the individual URL of that version as the `related` link.
  * `children` lists the diffs of the entities the comparison recursed into,
@@ -97,12 +101,24 @@ final class DiffResourceObject extends ResourceObject {
     // reference, and nothing reads it before normalization.
     $fields = [
       'summary' => $diff->summary,
+      'tree_summary' => $diff->treeSummary,
       'fields' => array_map(static fn (FieldDiff $field): array => [
         'label' => $field->label,
         'status' => $field->status,
         'left' => $field->left,
         'right' => $field->right,
         'ops' => $field->ops,
+        // A list, not a map keyed by delta. PHP has one array type, so a
+        // map would encode as a JSON array whenever the deltas happen to
+        // run from zero and as a JSON object whenever one is missing. A
+        // list always encodes as an array and each entry names its delta.
+        'items' => array_map(static fn (ItemDiff $item): array => [
+          'delta' => $item->delta,
+          'status' => $item->status,
+          'left' => $item->left,
+          'right' => $item->right,
+          'ops' => $item->ops,
+        ], $field->items),
       ], $diff->fields),
       'left' => $this->side('left', $entity_type, $diff->uuid, $diff->leftRevisionId, $left_version),
       'right' => $this->side('right', $entity_type, $diff->uuid, $diff->rightRevisionId, $right_version),
@@ -155,6 +171,7 @@ final class DiffResourceObject extends ResourceObject {
   public static function resourceType(array $versionable_types): ResourceType {
     $fields = [
       'summary' => new ResourceTypeAttribute('summary'),
+      'tree_summary' => new ResourceTypeAttribute('tree_summary'),
       'fields' => new ResourceTypeAttribute('fields'),
       'left' => new ResourceTypeRelationship('left'),
       'right' => new ResourceTypeRelationship('right'),

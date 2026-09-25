@@ -13,7 +13,7 @@ use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\diff\DiffBuilderManager;
-use Drupal\diff\DiffEntityComparison;
+use Drupal\diff\DiffEntityParser;
 use Drupal\diff\FieldReferenceInterface;
 use Drupal\jsonapi\ResourceType\ResourceType;
 use Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface;
@@ -22,11 +22,20 @@ use Drupal\jsonapi_diff\Access\EntityViewCheck;
 /**
  * Builds the comparison tree for a pair of revisions.
  *
- * The comparison is the Diff module's. It compares the root pair once and
- * returns every field in the tree as a flat list keyed by entity and field.
- * This class walks the reference fields itself to recover the structure Diff
- * discards, attributes each flat entry to its entity, and turns the compared
- * strings into line operations.
+ * The values are the Diff module's. Each side is read once through Diff's
+ * entity parser, which applies the field type builder plugins, the rules
+ * that decide which fields are compared at all, and its own recursion
+ * through reference fields. The result is a flat list of fields keyed by
+ * entity and field, with one string per delta.
+ *
+ * The parser is read rather than Diff's entity comparison service, which
+ * joins every delta of a field into one newline-separated string before a
+ * caller sees it. Reading the parser keeps the deltas, so a field reports a
+ * status per item as well as one for the whole field.
+ *
+ * This class walks the reference fields itself to recover the structure
+ * Diff discards, attributes each flat entry to its entity, and turns the
+ * compared strings into line operations.
  */
 final readonly class TreeBuilder {
 
@@ -36,7 +45,7 @@ final readonly class TreeBuilder {
   private const array CONFIG_CACHE_TAGS = ['config:diff.plugins', 'config:diff.settings'];
 
   public function __construct(
-    private DiffEntityComparison $diffEntityComparison,
+    private DiffEntityParser $diffEntityParser,
     private DiffBuilderManager $diffBuilderManager,
     private ResourceTypeRepositoryInterface $resourceTypeRepository,
     private EntityViewCheck $entityViewCheck,
@@ -58,8 +67,66 @@ final readonly class TreeBuilder {
    *   The root diff. Its cacheability covers the whole tree.
    */
   public function build(ContentEntityInterface $left, ContentEntityInterface $right, ?AccountInterface $account = NULL): EntityDiff {
-    $flat = $this->diffEntityComparison->compareRevisions($left, $right);
-    return $this->buildEntity($left, $right, $flat, new CacheableMetadata(), TRUE, $account);
+    return $this->buildEntity($left, $right, $this->compare($left, $right), new CacheableMetadata(), TRUE, $account);
+  }
+
+  /**
+   * Reads both sides and pairs their fields by key and by delta.
+   *
+   * The keys are the parser's, `{entity id}:{entity type}.{field name}`,
+   * for every entity in the tree. A field only one side holds keeps its
+   * key and gets no values on the other side. The order is the left side's
+   * fields, then the fields only the right side has, which is the order
+   * Diff's own comparison produces.
+   *
+   * @return array<string, array{label: string, left: array<int, string>, right: array<int, string>}>
+   *   The per-delta values of both sides, keyed by entity and field.
+   */
+  private function compare(ContentEntityInterface $left, ContentEntityInterface $right): array {
+    $left_values = $this->diffEntityParser->parseEntity($left);
+    $right_values = $this->diffEntityParser->parseEntity($right);
+
+    $flat = [];
+    foreach ($left_values + $right_values as $key => $build) {
+      $flat[$key] = [
+        'label' => (string) ($build['label'] ?? ''),
+        'left' => isset($left_values[$key]) ? $this->itemValues($left_values[$key]) : [],
+        'right' => isset($right_values[$key]) ? $this->itemValues($right_values[$key]) : [],
+      ];
+    }
+    return $flat;
+  }
+
+  /**
+   * Reduces one field's parsed build to one string per delta.
+   *
+   * A builder plugin indexes its output by delta and gives each delta
+   * either a string or a list of strings. The image plugin gives an array
+   * holding a render array for the thumbnail beside the value. A delta a
+   * plugin left out, such as an empty item, has no entry, so the deltas
+   * are not always a run from zero.
+   *
+   * @param array<int|string, mixed> $build
+   *   One field's entry in the parser's result, including its label.
+   *
+   * @return array<int, string>
+   *   The value of each delta, in delta order.
+   *
+   * @see \Drupal\diff\DiffEntityComparison::combineFields()
+   */
+  private function itemValues(array $build): array {
+    $values = [];
+    foreach ($build as $delta => $value) {
+      if (!is_int($delta)) {
+        continue;
+      }
+      if (is_array($value) && isset($value['#thumbnail'])) {
+        $value = $value['data'] ?? '';
+      }
+      $values[$delta] = is_array($value) ? implode("\n", $value) : (string) $value;
+    }
+    ksort($values);
+    return $values;
   }
 
   /**
@@ -69,7 +136,7 @@ final readonly class TreeBuilder {
    *   The left revision, or null when the left side lacks the entity.
    * @param \Drupal\Core\Entity\ContentEntityInterface|null $right
    *   The right revision, or null when the right side lacks the entity.
-   * @param array<string, array<string, mixed>> $flat
+   * @param array<string, array{label: string, left: array<int, string>, right: array<int, string>}> $flat
    *   The whole flat result of the root comparison.
    * @param \Drupal\Core\Cache\CacheableMetadata $collector
    *   The root's cacheability, which collects the whole tree.
@@ -105,11 +172,11 @@ final readonly class TreeBuilder {
         continue;
       }
       $definition = $entity->getFieldDefinition($name);
-      $label = $definition !== NULL ? (string) $definition->getLabel() : (string) $entry['#name'];
+      $label = $definition !== NULL ? (string) $definition->getLabel() : $entry['label'];
       $field = $this->buildField(
         $label,
-        (string) $entry['#data']['#left'],
-        (string) $entry['#data']['#right'],
+        $entry['left'],
+        $entry['right'],
         !$left instanceof ContentEntityInterface,
         !$right instanceof ContentEntityInterface,
       );
@@ -163,32 +230,106 @@ final readonly class TreeBuilder {
   }
 
   /**
-   * Turns one flat entry into a field diff with line operations.
+   * Turns one flat entry into a field diff, per item and as a whole.
+   *
+   * The whole-field values are the per-delta values joined with a newline,
+   * which is the string Diff's own comparison service hands a caller. The
+   * items are the same comparison made per delta.
+   *
+   * @param string $label
+   *   The field label.
+   * @param array<int, string> $left_items
+   *   The left value of each delta.
+   * @param array<int, string> $right_items
+   *   The right value of each delta.
+   * @param bool $left_absent
+   *   TRUE when the entity itself is missing on the left.
+   * @param bool $right_absent
+   *   TRUE when the entity itself is missing on the right.
+   */
+  private function buildField(string $label, array $left_items, array $right_items, bool $left_absent, bool $right_absent): FieldDiff {
+    $deltas = array_keys($left_items + $right_items);
+    sort($deltas);
+    $items = [];
+    foreach ($deltas as $delta) {
+      $item_left = $left_items[$delta] ?? '';
+      $item_right = $right_items[$delta] ?? '';
+      $items[] = new ItemDiff(
+        $delta,
+        $this->statusOf($item_left, $item_right, $left_absent, $right_absent),
+        $item_left,
+        $item_right,
+        $this->buildOps($item_left, $item_right),
+      );
+    }
+
+    $left = implode("\n", $left_items);
+    $right = implode("\n", $right_items);
+    return new FieldDiff(
+      $label,
+      $this->statusOfItems($items, $left, $right, $left_absent, $right_absent),
+      $left,
+      $right,
+      $this->buildOps($left, $right),
+      $items,
+    );
+  }
+
+  /**
+   * Decides the status of one comparison of two strings.
    *
    * Diff gives an empty string for a side that has no value. An empty side
    * is therefore an absent side, the same as when the entity itself is
    * missing on that side.
    */
-  private function buildField(string $label, string $left, string $right, bool $left_absent, bool $right_absent): FieldDiff {
+  private function statusOf(string $left, string $right, bool $left_absent, bool $right_absent): string {
     if ($left_absent) {
-      $status = FieldDiff::ADDED;
+      return FieldDiff::ADDED;
     }
-    elseif ($right_absent) {
-      $status = FieldDiff::REMOVED;
+    if ($right_absent) {
+      return FieldDiff::REMOVED;
     }
-    elseif ($left === $right) {
-      $status = FieldDiff::SAME;
+    if ($left === $right) {
+      return FieldDiff::SAME;
     }
-    elseif ($left === '') {
-      $status = FieldDiff::ADDED;
+    if ($left === '') {
+      return FieldDiff::ADDED;
     }
-    elseif ($right === '') {
-      $status = FieldDiff::REMOVED;
+    if ($right === '') {
+      return FieldDiff::REMOVED;
     }
-    else {
-      $status = FieldDiff::CHANGED;
+    return FieldDiff::CHANGED;
+  }
+
+  /**
+   * Decides the status of a whole field from the statuses of its items.
+   *
+   * One status for every item is that status. Anything else is a change,
+   * because some of the field changed and some of it did not. The two can
+   * then never disagree: a field reported as `same` has no item that is
+   * not, and a field reported as `changed` has at least one item that is
+   * not `same`.
+   *
+   * A field with no items at all is judged on its joined values, which is
+   * the only thing left to judge it on.
+   *
+   * @param list<\Drupal\jsonapi_diff\Comparison\ItemDiff> $items
+   *   The items of the field.
+   * @param string $left
+   *   The joined left value.
+   * @param string $right
+   *   The joined right value.
+   * @param bool $left_absent
+   *   TRUE when the entity itself is missing on the left.
+   * @param bool $right_absent
+   *   TRUE when the entity itself is missing on the right.
+   */
+  private function statusOfItems(array $items, string $left, string $right, bool $left_absent, bool $right_absent): string {
+    if ($items === []) {
+      return $this->statusOf($left, $right, $left_absent, $right_absent);
     }
-    return new FieldDiff($label, $status, $left, $right, $this->buildOps($left, $right));
+    $statuses = array_values(array_unique(array_map(static fn (ItemDiff $item): string => $item->status, $items)));
+    return count($statuses) === 1 ? $statuses[0] : FieldDiff::CHANGED;
   }
 
   /**
