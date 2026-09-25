@@ -208,6 +208,9 @@ final readonly class TreeBuilder {
       );
       $fields[$resource_type->getPublicName($name)] = $field;
     }
+    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector, $account);
+    $fields += $this->referenceFields($children, $entity, $resource_type);
+
     $counts = array_count_values(array_map(static fn (FieldDiff $field): string => $field->status, $fields));
     $summary = [
       FieldDiff::ADDED => $counts[FieldDiff::ADDED] ?? 0,
@@ -215,8 +218,6 @@ final readonly class TreeBuilder {
       FieldDiff::CHANGED => $counts[FieldDiff::CHANGED] ?? 0,
       FieldDiff::SAME => $counts[FieldDiff::SAME] ?? 0,
     ];
-
-    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector, $account);
 
     return new EntityDiff(
       $entity->getEntityTypeId(),
@@ -230,6 +231,51 @@ final readonly class TreeBuilder {
       $is_root ? $collector : $cacheability,
       $right instanceof ContentEntityInterface && $right->uuid() !== $entity->uuid() ? (string) $right->uuid() : NULL,
     );
+  }
+
+  /**
+   * Builds an entry for each reference field the comparison recursed into.
+   *
+   * A recursed field has no compared values of its own, because Diff hands
+   * its targets to the recursion instead of building a string. Without an
+   * entry a client cannot ask whether the list changed, and two changes
+   * reach no count at all: a draft that only reordered its blocks, and a
+   * block added or removed that reports no fields of its own.
+   *
+   * The status describes the list and nothing else. It is `changed` when a
+   * child was added, removed or moved, and `same` when every child stayed
+   * where it was. A child whose own text changed leaves the list alone, and
+   * its own fields already reach the counts through `tree_summary`, so
+   * nothing is counted twice.
+   *
+   * The entry has no values, no operations and no items, which is the one
+   * place a field reports none of those.
+   *
+   * @param list<\Drupal\jsonapi_diff\Comparison\ChildDiff> $children
+   *   The children of this entity.
+   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
+   *   The entity the fields belong to.
+   * @param \Drupal\jsonapi\ResourceType\ResourceType $resource_type
+   *   The resource type, for the label and the name mapping.
+   *
+   * @return array<string, \Drupal\jsonapi_diff\Comparison\FieldDiff>
+   *   One entry per recursed reference field, keyed by public name.
+   */
+  private function referenceFields(array $children, ContentEntityInterface $entity, ResourceType $resource_type): array {
+    $statuses = [];
+    foreach ($children as $child) {
+      $changed = ($statuses[$child->field] ?? FieldDiff::SAME) === FieldDiff::CHANGED
+        || $child->status !== ChildDiff::SAME;
+      $statuses[$child->field] = $changed ? FieldDiff::CHANGED : FieldDiff::SAME;
+    }
+
+    $fields = [];
+    foreach ($statuses as $public_name => $status) {
+      $definition = $entity->getFieldDefinition($resource_type->getInternalName($public_name));
+      $label = $definition !== NULL ? (string) $definition->getLabel() : $public_name;
+      $fields[$public_name] = new FieldDiff($label, $status, '', '', [], []);
+    }
+    return $fields;
   }
 
   /**
