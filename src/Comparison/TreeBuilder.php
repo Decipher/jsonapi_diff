@@ -78,7 +78,7 @@ final readonly class TreeBuilder {
    *   The root diff. Its cacheability covers the whole tree.
    */
   public function build(ContentEntityInterface $left, ContentEntityInterface $right, ?AccountInterface $account = NULL): EntityDiff {
-    return $this->buildEntity($left, $right, $this->compare($left, $right), new CacheableMetadata(), TRUE, $account);
+    return $this->buildEntity($left, $right, $this->compare($left, $right), new CacheableMetadata(), $account);
   }
 
   /**
@@ -163,24 +163,26 @@ final readonly class TreeBuilder {
    * @param array{left: array<string, array{label: string, values: array<int, string>}>, right: array<string, array{label: string, values: array<int, string>}>} $flat
    *   The whole flat result of the root comparison.
    * @param \Drupal\Core\Cache\CacheableMetadata $collector
-   *   The root's cacheability, which collects the whole tree.
-   * @param bool $is_root
-   *   TRUE for the root entity, whose cacheability is the collector itself.
+   *   The tree's cacheability, which collects every entity and access decision
+   *   in it. Every diff in the tree carries it, not just the root: a child is
+   *   included as a resource of its own, and JSON:API's normalization cache
+   *   keys it by type, id and language. A child varied only by its own
+   *   entities would be served to an account the tree's access decisions
+   *   filtered differently.
    * @param \Drupal\Core\Session\AccountInterface|null $account
    *   The account every access decision is taken for.
    */
-  private function buildEntity(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, CacheableMetadata $collector, bool $is_root, ?AccountInterface $account): EntityDiff {
+  private function buildEntity(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, CacheableMetadata $collector, ?AccountInterface $account): EntityDiff {
     $entity = $left ?? $right;
     assert($entity instanceof ContentEntityInterface);
     $resource_type = $this->resourceTypeRepository->get($entity->getEntityTypeId(), $entity->bundle());
 
-    $cacheability = (new CacheableMetadata())->addCacheTags(self::CONFIG_CACHE_TAGS);
+    $collector->addCacheTags(self::CONFIG_CACHE_TAGS);
     foreach ([$left, $right] as $side) {
       if ($side instanceof ContentEntityInterface) {
-        $cacheability->addCacheableDependency($side);
+        $collector->addCacheableDependency($side);
       }
     }
-    $collector->addCacheableDependency($cacheability);
 
     $fields = [];
     $left_prefix = $left instanceof ContentEntityInterface ? $this->prefixOf($left) : NULL;
@@ -228,7 +230,7 @@ final readonly class TreeBuilder {
       $fields,
       $summary,
       $children,
-      $is_root ? $collector : $cacheability,
+      $collector,
       $right instanceof ContentEntityInterface && $right->uuid() !== $entity->uuid() ? (string) $right->uuid() : NULL,
     );
   }
@@ -545,20 +547,20 @@ final readonly class TreeBuilder {
         if (isset($right_children[$id])) {
           [$right_delta, $right_child] = $right_children[$id];
           $status = $left_delta === $right_delta ? ChildDiff::SAME : ChildDiff::MOVED;
-          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, ChildDiff::MATCH_ID, $this->buildEntity($left_child, $right_child, $flat, $collector, FALSE, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, ChildDiff::MATCH_ID, $this->buildEntity($left_child, $right_child, $flat, $collector, $account));
         }
         elseif (isset($pairs[$id])) {
           // A positional pair sits at one delta on both sides, so its
           // status is always `same`. What changed is inside the pair.
           [$right_delta, $right_child] = $right_children[$pairs[$id]];
-          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, ChildDiff::SAME, ChildDiff::MATCH_POSITION, $this->buildEntity($left_child, $right_child, $flat, $collector, FALSE, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, ChildDiff::SAME, ChildDiff::MATCH_POSITION, $this->buildEntity($left_child, $right_child, $flat, $collector, $account));
         }
         else {
-          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, ChildDiff::MATCH_NONE, $this->buildEntity($left_child, NULL, $flat, $collector, FALSE, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, ChildDiff::MATCH_NONE, $this->buildEntity($left_child, NULL, $flat, $collector, $account));
         }
       }
       foreach (array_diff_key($right_children, $left_children, $claimed) as [$right_delta, $right_child]) {
-        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, ChildDiff::MATCH_NONE, $this->buildEntity(NULL, $right_child, $flat, $collector, FALSE, $account));
+        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, ChildDiff::MATCH_NONE, $this->buildEntity(NULL, $right_child, $flat, $collector, $account));
       }
     }
     return $children;

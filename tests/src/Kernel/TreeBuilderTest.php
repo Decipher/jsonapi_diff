@@ -1030,7 +1030,11 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
-   * The root carries the tags of every entity in the tree, children their own.
+   * Every diff in the tree carries the tags of every entity in it.
+   *
+   * A child is included as a resource of its own, and JSON:API caches its
+   * normalization apart from the root's. It has to vary by everything the
+   * tree was built from, or one account's child is served to another.
    */
   public function testCacheability(): void {
     $first = $this->createParagraph('block', ['field_body' => 'first']);
@@ -1051,11 +1055,9 @@ class TreeBuilderTest extends KernelTestBase {
 
     $first_tags = $this->childFor($diff, $first)->diff->cacheability->getCacheTags();
     $this->assertContains('paragraph:' . $first->id(), $first_tags);
-    $this->assertContains('config:diff.plugins', $first_tags);
-    $this->assertNotContains('paragraph:' . $second->id(), $first_tags);
-    // A paragraph inherits its parent's view access, so the node the access
-    // decision read is part of the child's own cacheability.
+    $this->assertContains('paragraph:' . $second->id(), $first_tags);
     $this->assertContains('node:' . $node->id(), $first_tags);
+    $this->assertContains('config:diff.plugins', $first_tags);
   }
 
   /**
@@ -1199,11 +1201,15 @@ class TreeBuilderTest extends KernelTestBase {
     $this->reviseParagraph($child);
     [$left, $right] = $this->revise($node, ['field_text' => 'text changed']);
 
-    $cacheability = $this->builder->build($left, $right)->cacheability;
+    $diff = $this->builder->build($left, $right);
 
-    $this->assertContains(TestAccess::CACHE_TAG, $cacheability->getCacheTags());
-    $this->assertContains('user', $cacheability->getCacheContexts());
-    $this->assertContains('config:paragraphs.settings', $cacheability->getCacheTags());
+    // The child carries the same decisions as the root. Its normalization is
+    // cached apart from the root's, keyed only by type, id and language.
+    foreach ([$diff->cacheability, $this->childFor($diff, $child)->diff->cacheability] as $cacheability) {
+      $this->assertContains(TestAccess::CACHE_TAG, $cacheability->getCacheTags());
+      $this->assertContains('user', $cacheability->getCacheContexts());
+      $this->assertContains('config:paragraphs.settings', $cacheability->getCacheTags());
+    }
   }
 
   /**
