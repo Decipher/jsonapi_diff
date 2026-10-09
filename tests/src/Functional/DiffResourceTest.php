@@ -594,6 +594,30 @@ class DiffResourceTest extends BrowserTestBase {
   }
 
   /**
+   * An unpublished translation is judged as itself, not by its source.
+   *
+   * Translations are published apart. The diff reads the content language's
+   * translation, so access is taken on that translation: a published English
+   * node does not let a visitor read its unpublished French draft.
+   */
+  public function testUnpublishedTranslationIsDenied(): void {
+    ConfigurableLanguage::createFromLangcode('fr')->save();
+    $this->container->get('content_translation.manager')->setEnabled('node', 'article', TRUE);
+    $this->rebuildContainer();
+    $this->container->get('router.builder')->rebuild();
+
+    $node = $this->createArticle(['field_text' => 'Hello', 'uid' => $this->editor->id()]);
+    $node->addTranslation('fr', ['title' => 'Article', 'field_text' => 'Brouillon secret', 'status' => 0, 'uid' => $this->editor->id()])->save();
+
+    $this->fetch($this->path($node), []);
+    $this->assertSession()->statusCodeEquals(200);
+
+    $this->fetch('/fr' . $this->path($node), []);
+    $this->assertSession()->statusCodeEquals(403);
+    $this->assertSession()->responseNotContains('Brouillon secret');
+  }
+
+  /**
    * Builds the diff path of a node.
    */
   protected function path(NodeInterface $node): string {

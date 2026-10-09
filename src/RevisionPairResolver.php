@@ -117,7 +117,8 @@ final readonly class RevisionPairResolver {
     }
 
     assert($revision instanceof ContentEntityInterface);
-    return $revision;
+    // The translation the comparison reads is the one judged and served.
+    return $this->entityViewCheck->compared($revision);
   }
 
   /**

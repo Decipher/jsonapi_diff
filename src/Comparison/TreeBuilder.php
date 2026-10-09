@@ -755,6 +755,8 @@ final readonly class TreeBuilder {
       if (!$child instanceof ContentEntityInterface) {
         continue;
       }
+      // Judge, compare and serve the translation the comparison reads.
+      $child = $this->entityViewCheck->compared($child);
       if (!$this->isServable($child, $collector, $account)) {
         $denied[$child->id()] = TRUE;
         continue;

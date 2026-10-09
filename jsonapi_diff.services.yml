@@ -6,6 +6,7 @@ services:
     class: Drupal\jsonapi_diff\Access\EntityViewCheck
     arguments:
       - '@jsonapi.entity_access_checker'
+      - '@language_manager'
   jsonapi_diff.revision_pair_resolver:
     class: Drupal\jsonapi_diff\RevisionPairResolver
     arguments:
