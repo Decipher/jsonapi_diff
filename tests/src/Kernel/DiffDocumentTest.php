@@ -20,6 +20,7 @@ use Drupal\KernelTests\KernelTestBase;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * Proves the document shape on core JSON:API's own value objects.
@@ -33,6 +34,7 @@ use PHPUnit\Framework\Attributes\Group;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class DiffDocumentTest extends KernelTestBase {
 
   /**

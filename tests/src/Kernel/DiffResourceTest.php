@@ -17,6 +17,7 @@ use Drupal\Tests\jsonapi_diff\Traits\DiffContentTrait;
 use Drupal\Tests\user\Traits\UserCreationTrait;
 use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Event\ResponseEvent;
@@ -33,6 +34,7 @@ use Symfony\Component\Routing\Route;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class DiffResourceTest extends KernelTestBase {
 
   use DiffContentTrait;
@@ -92,6 +94,9 @@ class DiffResourceTest extends KernelTestBase {
     // The links and the access checker need the routes.
     $this->container->get('router.builder')->rebuild();
 
+    // User 1 bypasses access in a kernel test, so it is spent on a
+    // placeholder and the editor's permissions are the ones that count.
+    $this->createUser([], 'placeholder');
     $this->editor = $this->asAccount($this->createUser([
       'access content',
       'view own unpublished content',

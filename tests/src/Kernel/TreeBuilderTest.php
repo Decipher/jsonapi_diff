@@ -24,6 +24,7 @@ use Drupal\paragraphs\ParagraphInterface;
 use Drupal\Tests\user\Traits\UserCreationTrait;
 use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * Tests the comparison tree built from a pair of revisions.
@@ -35,6 +36,7 @@ use PHPUnit\Framework\Attributes\Group;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class TreeBuilderTest extends KernelTestBase {
 
   use UserCreationTrait;

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\jsonapi_diff\Functional;
 
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * Tests the diff link JSON:API Hypermedia adds to a resource object.
@@ -15,6 +16,7 @@ use PHPUnit\Framework\Attributes\Group;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class DiffLinkProviderTest extends DiffLinkProviderTestBase {
 
   /**

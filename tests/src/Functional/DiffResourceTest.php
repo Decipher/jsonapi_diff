@@ -15,6 +15,7 @@ use Drupal\user\Entity\Role;
 use Drupal\user\RoleInterface;
 use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * Tests the diff route over real HTTP.
@@ -26,6 +27,7 @@ use PHPUnit\Framework\Attributes\Group;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class DiffResourceTest extends BrowserTestBase {
 
   use DiffContentTrait;
