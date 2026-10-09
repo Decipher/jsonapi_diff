@@ -12,6 +12,7 @@ use Drupal\Component\Diff\Engine\DiffOpDelete;
 use Drupal\Component\Utility\Html;
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Entity\ContentEntityInterface;
+use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\diff\DiffBuilderManager;
 use Drupal\diff\DiffEntityParser;
@@ -203,8 +204,8 @@ final readonly class TreeBuilder {
         : ($left_entry['label'] ?? $right_entry['label'] ?? '');
       $field = $this->buildField(
         $label,
-        $left_entry['values'] ?? [],
-        $right_entry['values'] ?? [],
+        $this->guardReferences($left, $name, $left_entry['values'] ?? [], $collector, $account),
+        $this->guardReferences($right, $name, $right_entry['values'] ?? [], $collector, $account),
         !$left instanceof ContentEntityInterface,
         !$right instanceof ContentEntityInterface,
       );
@@ -764,6 +765,53 @@ final readonly class TreeBuilder {
       $children[$child->id()] = [(int) $delta, $child];
     }
     return $children;
+  }
+
+  /**
+   * Hides the label of every referenced entity the account may not view.
+   *
+   * Diff renders an entity reference, file or image item as its target's
+   * label or file name, with no access check on the target. JSON:API would
+   * serve only an identifier for a target the account may not view, so the
+   * value of such an item falls back to the target's id, which is what Diff
+   * itself shows when it compares ids. The target's cacheability is
+   * collected either way, so a renamed target is not served stale.
+   *
+   * @param \Drupal\Core\Entity\ContentEntityInterface|null $side
+   *   The revision of this side, or NULL when the side lacks the entity.
+   * @param string $name
+   *   The field name.
+   * @param array<int, string> $values
+   *   The field's value per delta, as Diff rendered it.
+   * @param \Drupal\Core\Cache\CacheableMetadata $collector
+   *   Collects the cacheability of every target and access decision.
+   * @param \Drupal\Core\Session\AccountInterface|null $account
+   *   The account every access decision is taken for.
+   *
+   * @return array<int, string>
+   *   The values, with each hidden label replaced by its target's id.
+   */
+  private function guardReferences(?ContentEntityInterface $side, string $name, array $values, CacheableMetadata $collector, ?AccountInterface $account): array {
+    if (!$side instanceof ContentEntityInterface || !$side->hasField($name)) {
+      return $values;
+    }
+    $type = $side->getFieldDefinition($name)?->getType();
+    if (!in_array($type, ['entity_reference', 'file', 'image'], TRUE)) {
+      return $values;
+    }
+    foreach ($side->get($name) as $delta => $item) {
+      $target = $item->entity ?? NULL;
+      if (!$target instanceof EntityInterface || !isset($values[$delta])) {
+        continue;
+      }
+      $collector->addCacheableDependency($target);
+      $access = $target->access('view label', $account, TRUE);
+      $collector->addCacheableDependency($access);
+      if (!$access->isAllowed()) {
+        $values[$delta] = (string) $target->id();
+      }
+    }
+    return $values;
   }
 
   /**

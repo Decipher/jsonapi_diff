@@ -129,6 +129,46 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * A reference shows a target's label only to an account that may see it.
+   *
+   * Diff renders a reference as its target's label with no access check. A
+   * target the reader may not view shows as its id, as JSON:API would serve
+   * only its identifier, and the target's cache tag is collected.
+   */
+  public function testReferencedLabelNeedsAccessToTheTarget(): void {
+    FieldStorageConfig::create([
+      'field_name' => 'field_related',
+      'entity_type' => 'node',
+      'type' => 'entity_reference',
+      'settings' => ['target_type' => 'node'],
+      'cardinality' => -1,
+    ])->save();
+    FieldConfig::create([
+      'field_name' => 'field_related',
+      'entity_type' => 'node',
+      'bundle' => 'article',
+      'label' => 'Related',
+    ])->save();
+    $this->showInViewDisplay('node', 'article', 'field_related', 'entity_reference_label');
+    $public = Node::create(['type' => 'article', 'title' => 'Public title']);
+    $public->save();
+    $unpublished = Node::create(['type' => 'article', 'title' => 'Unpublished title', 'status' => 0]);
+    $unpublished->save();
+    [$left, $right] = $this->revise(
+      $this->createNode(['field_related' => [$public->id()]]),
+      ['field_related' => [$public->id(), $unpublished->id()]],
+    );
+
+    $diff = $this->builder->build($left, $right);
+
+    $field = $diff->fields['field_related'];
+    $this->assertSame('Public title', $field->left);
+    $this->assertSame("Public title\n" . $unpublished->id(), $field->right);
+    $this->assertStringNotContainsString('Unpublished title', json_encode($field->ops, JSON_THROW_ON_ERROR));
+    $this->assertContains('node:' . $unpublished->id(), $diff->cacheability->getCacheTags());
+  }
+
+  /**
    * A multi-value field that gained an item shows the added line.
    */
   public function testMultiValueFieldGainsAnItem(): void {
