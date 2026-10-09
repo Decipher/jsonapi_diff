@@ -18,7 +18,7 @@
     "require": {
         "php": ">=8.3",
         "drupal/diff": "^2.1",
-        "drupal/jsonapi_resources": "^1.0"
+        "drupal/jsonapi_resources": "^1.8"
     },
     "require-dev": {
         "drupal/jsonapi_hypermedia": "^1.10",
