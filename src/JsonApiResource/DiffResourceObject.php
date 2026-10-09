@@ -216,7 +216,10 @@ final class DiffResourceObject extends ResourceObject {
       'drupal_internal__revision_id' => $revision_id,
     ]);
     $links = [];
-    if (!$entity_type->isInternal()) {
+    // JSON:API accepts resourceVersion only on a versionable resource type.
+    // For any other, such as a paragraph, the identifier's meta carries the
+    // revision id and a link would answer 400.
+    if (!$entity_type->isInternal() && $entity_type->isVersionable()) {
       $url = Url::fromRoute(sprintf('jsonapi.%s.individual', $entity_type->getTypeName()), ['entity' => $uuid], ['query' => ['resourceVersion' => $version]]);
       $links['related'] = new Link(new CacheableMetadata(), $url, 'related');
     }

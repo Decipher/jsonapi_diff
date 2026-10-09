@@ -209,6 +209,25 @@ class DiffDocumentTest extends KernelTestBase {
   }
 
   /**
+   * A side of a type without versions links nowhere and keeps its meta.
+   *
+   * JSON:API accepts resourceVersion only on a versionable resource type, so
+   * a link for a paragraph's side would answer 400.
+   */
+  public function testSideOfUnversionableTypeHasNoRelatedLink(): void {
+    $unversioned = new ResourceType('node', 'article', Node::class, FALSE, TRUE, TRUE, FALSE);
+    $diff = $this->entityDiff($this->uuid, 1, 2);
+    $root = new DiffResourceObject($this->diffType, $unversioned, $diff, 'id:1', 'id:2');
+
+    $data = $this->normalize($root, [])['data'];
+
+    foreach (['left' => 1, 'right' => 2] as $side => $revision_id) {
+      $this->assertArrayNotHasKey('links', $data['relationships'][$side]);
+      $this->assertSame($revision_id, $data['relationships'][$side]['data']['meta']['drupal_internal__revision_id']);
+    }
+  }
+
+  /**
    * Children are identifiers with structural meta, and their diffs included.
    */
   public function testChildrenAreIncludedWithStructuralMeta(): void {
