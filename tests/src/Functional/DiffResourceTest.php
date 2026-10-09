@@ -609,14 +609,14 @@ class DiffResourceTest extends BrowserTestBase {
     $this->container->get('router.builder')->rebuild();
 
     $node = $this->createArticle(['field_text' => 'Hello', 'uid' => $this->editor->id()]);
-    $node->addTranslation('fr', ['title' => 'Article', 'field_text' => 'Brouillon secret', 'status' => 0, 'uid' => $this->editor->id()])->save();
+    $node->addTranslation('fr', ['title' => 'Article', 'field_text' => 'Secret French draft', 'status' => 0, 'uid' => $this->editor->id()])->save();
 
     $this->fetch($this->path($node), []);
     $this->assertSession()->statusCodeEquals(200);
 
     $this->fetch('/fr' . $this->path($node), []);
     $this->assertSession()->statusCodeEquals(403);
-    $this->assertSession()->responseNotContains('Brouillon secret');
+    $this->assertSession()->responseNotContains('Secret French draft');
   }
 
   /**

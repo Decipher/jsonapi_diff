@@ -216,7 +216,7 @@ class DiffDocumentTest extends KernelTestBase {
    * JSON:API accepts resourceVersion only on a versionable resource type, so
    * a link for a paragraph's side would answer 400.
    */
-  public function testSideOfUnversionableTypeHasNoRelatedLink(): void {
+  public function testSideOfTypeWithoutVersionsHasNoRelatedLink(): void {
     $unversioned = new ResourceType('node', 'article', Node::class, FALSE, TRUE, TRUE, FALSE);
     $diff = $this->entityDiff($this->uuid, 1, 2);
     $root = new DiffResourceObject($this->diffType, $unversioned, $diff, 'id:1', 'id:2');
