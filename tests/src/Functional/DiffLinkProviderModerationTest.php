@@ -9,6 +9,7 @@ use Drupal\node\NodeInterface;
 use Drupal\Tests\content_moderation\Traits\ContentModerationTestTrait;
 use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * Tests the diff link against content moderation's latest version rule.
@@ -20,6 +21,7 @@ use PHPUnit\Framework\Attributes\Group;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class DiffLinkProviderModerationTest extends DiffLinkProviderTestBase {
 
   use ContentModerationTestTrait;

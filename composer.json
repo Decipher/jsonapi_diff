@@ -3,6 +3,11 @@
     "description": "Exposes the difference between two revisions of an entity as a JSON:API document.",
     "type": "drupal-module",
     "license": "GPL-2.0-or-later",
+    "homepage": "https://www.drupal.org/project/jsonapi_diff",
+    "support": {
+        "issues": "https://www.drupal.org/project/issues/jsonapi_diff",
+        "source": "https://git.drupalcode.org/project/jsonapi_diff"
+    },
     "authors": [
         {
             "name": "Stuart Clark",
@@ -13,7 +18,7 @@
     "require": {
         "php": ">=8.3",
         "drupal/diff": "^2.1",
-        "drupal/jsonapi_resources": "^1.0"
+        "drupal/jsonapi_resources": "^1.8"
     },
     "require-dev": {
         "drupal/jsonapi_hypermedia": "^1.10",

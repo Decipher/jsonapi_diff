@@ -24,6 +24,7 @@ use Drupal\paragraphs\ParagraphInterface;
 use Drupal\Tests\user\Traits\UserCreationTrait;
 use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * Tests the comparison tree built from a pair of revisions.
@@ -35,6 +36,7 @@ use PHPUnit\Framework\Attributes\Group;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class TreeBuilderTest extends KernelTestBase {
 
   use UserCreationTrait;
@@ -126,6 +128,46 @@ class TreeBuilderTest extends KernelTestBase {
     $this->assertSame(0, $diff->summary['added']);
     $this->assertSame(0, $diff->summary['removed']);
     $this->assertSame([], $diff->children);
+  }
+
+  /**
+   * A reference shows a target's label only to an account that may see it.
+   *
+   * Diff renders a reference as its target's label with no access check. A
+   * target the reader may not view shows as its id, as JSON:API would serve
+   * only its identifier, and the target's cache tag is collected.
+   */
+  public function testReferencedLabelNeedsAccessToTheTarget(): void {
+    FieldStorageConfig::create([
+      'field_name' => 'field_related',
+      'entity_type' => 'node',
+      'type' => 'entity_reference',
+      'settings' => ['target_type' => 'node'],
+      'cardinality' => -1,
+    ])->save();
+    FieldConfig::create([
+      'field_name' => 'field_related',
+      'entity_type' => 'node',
+      'bundle' => 'article',
+      'label' => 'Related',
+    ])->save();
+    $this->showInViewDisplay('node', 'article', 'field_related', 'entity_reference_label');
+    $public = Node::create(['type' => 'article', 'title' => 'Public title']);
+    $public->save();
+    $unpublished = Node::create(['type' => 'article', 'title' => 'Unpublished title', 'status' => 0]);
+    $unpublished->save();
+    [$left, $right] = $this->revise(
+      $this->createNode(['field_related' => [$public->id()]]),
+      ['field_related' => [$public->id(), $unpublished->id()]],
+    );
+
+    $diff = $this->builder->build($left, $right);
+
+    $field = $diff->fields['field_related'];
+    $this->assertSame('Public title', $field->left);
+    $this->assertSame("Public title\n" . $unpublished->id(), $field->right);
+    $this->assertStringNotContainsString('Unpublished title', json_encode($field->ops, JSON_THROW_ON_ERROR));
+    $this->assertContains('node:' . $unpublished->id(), $diff->cacheability->getCacheTags());
   }
 
   /**
@@ -366,6 +408,19 @@ class TreeBuilderTest extends KernelTestBase {
     $this->assertSame(FieldDiff::SAME, $diff->fields['field_blocks']->status);
     $this->assertSame(FieldDiff::CHANGED, $diff->fields['field_text']->status);
     $this->assertSame(1, $diff->summary[FieldDiff::CHANGED]);
+  }
+
+  /**
+   * A list empty on both sides still has its entry, and counts as same.
+   */
+  public function testAnEmptyListOnBothSidesHasItsEntry(): void {
+    [$left, $right] = $this->revise($this->createNode(['field_text' => 'text']), ['field_text' => 'changed text']);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertArrayHasKey('field_blocks', $diff->fields);
+    $this->assertSame(FieldDiff::SAME, $diff->fields['field_blocks']->status);
+    $this->assertSame([], $diff->children);
   }
 
   /**
@@ -1030,7 +1085,11 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
-   * The root carries the tags of every entity in the tree, children their own.
+   * Every diff in the tree carries the tags of every entity in it.
+   *
+   * A child is included as a resource of its own, and JSON:API caches its
+   * normalization apart from the root's. It has to vary by everything the
+   * tree was built from, or one account's child is served to another.
    */
   public function testCacheability(): void {
     $first = $this->createParagraph('block', ['field_body' => 'first']);
@@ -1051,11 +1110,9 @@ class TreeBuilderTest extends KernelTestBase {
 
     $first_tags = $this->childFor($diff, $first)->diff->cacheability->getCacheTags();
     $this->assertContains('paragraph:' . $first->id(), $first_tags);
-    $this->assertContains('config:diff.plugins', $first_tags);
-    $this->assertNotContains('paragraph:' . $second->id(), $first_tags);
-    // A paragraph inherits its parent's view access, so the node the access
-    // decision read is part of the child's own cacheability.
+    $this->assertContains('paragraph:' . $second->id(), $first_tags);
     $this->assertContains('node:' . $node->id(), $first_tags);
+    $this->assertContains('config:diff.plugins', $first_tags);
   }
 
   /**
@@ -1199,11 +1256,15 @@ class TreeBuilderTest extends KernelTestBase {
     $this->reviseParagraph($child);
     [$left, $right] = $this->revise($node, ['field_text' => 'text changed']);
 
-    $cacheability = $this->builder->build($left, $right)->cacheability;
+    $diff = $this->builder->build($left, $right);
 
-    $this->assertContains(TestAccess::CACHE_TAG, $cacheability->getCacheTags());
-    $this->assertContains('user', $cacheability->getCacheContexts());
-    $this->assertContains('config:paragraphs.settings', $cacheability->getCacheTags());
+    // The child carries the same decisions as the root. Its normalization is
+    // cached apart from the root's, keyed only by type, id and language.
+    foreach ([$diff->cacheability, $this->childFor($diff, $child)->diff->cacheability] as $cacheability) {
+      $this->assertContains(TestAccess::CACHE_TAG, $cacheability->getCacheTags());
+      $this->assertContains('user', $cacheability->getCacheContexts());
+      $this->assertContains('config:paragraphs.settings', $cacheability->getCacheTags());
+    }
   }
 
   /**

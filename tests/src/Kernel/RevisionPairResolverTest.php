@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\jsonapi_diff\Kernel;
 
+use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Drupal\Core\Http\Exception\CacheableAccessDeniedHttpException;
 use Drupal\Core\Http\Exception\CacheableBadRequestHttpException;
 use Drupal\Core\Http\Exception\CacheableNotFoundHttpException;
@@ -24,6 +26,8 @@ use Drupal\user\RoleInterface;
  *
  * @group jsonapi_diff
  */
+#[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class RevisionPairResolverTest extends KernelTestBase {
 
   use ContentModerationTestTrait;
@@ -81,7 +85,12 @@ class RevisionPairResolverTest extends KernelTestBase {
     assert($anonymous instanceof Role);
     $anonymous->grantPermission('access content')->save();
 
-    $this->owner = $this->createUser([]);
+    // User 1 bypasses access in a kernel test, so it is spent on a
+    // placeholder and the owner is judged by ordinary rules.
+    $this->createUser([]);
+    // The owner reads their own draft: what core asks of a non-admin to view
+    // an unpublished node and its revisions.
+    $this->owner = $this->createUser(['access content', 'view own unpublished content', 'view all revisions']);
     $this->node = $this->createDraftedNode($this->owner);
 
     $this->resolver = $this->container->get('jsonapi_diff.revision_pair_resolver');
@@ -345,7 +354,7 @@ class RevisionPairResolverTest extends KernelTestBase {
    *   Permissions granted through a role of its own.
    */
   protected function createUser(array $permissions): User {
-    $user = User::create(['name' => $this->randomMachineName()]);
+    $user = User::create(['name' => $this->randomMachineName(), 'status' => 1]);
     if ($permissions) {
       $role_id = $this->randomMachineName(8);
       $role = Role::create(['id' => $role_id, 'label' => 'Test']);

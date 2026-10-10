@@ -8,6 +8,7 @@ use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
 use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Entity\EntityRepositoryInterface;
+use Drupal\Core\Http\Exception\CacheableBadRequestHttpException;
 use Drupal\Core\Http\Exception\CacheableNotFoundHttpException;
 use Drupal\Core\Language\LanguageInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
@@ -89,15 +90,22 @@ final class DiffResource extends ResourceBase implements ContainerInjectionInter
     // `?include` against entity reference fields and this document is
     // already complete. The contexts that factory adds are therefore
     // declared here. `url.query_args:fields` is one of them, because a
-    // sparse fieldset changes the document. `url.query_args:include` is not,
-    // because this route ignores `include`.
+    // sparse fieldset changes the document.
     $cacheability = (new CacheableMetadata())->addCacheContexts([
       'url.query_args:leftVersion',
       'url.query_args:rightVersion',
       'url.query_args:fields',
+      'url.query_args:include',
       'user.permissions',
       'languages:language_content',
     ]);
+
+    // The document always includes its whole tree. The JSON:API
+    // specification requires a 400 for an `include` a server does not
+    // support, rather than a document that silently ignores it.
+    if ($request->query->has('include')) {
+      throw new CacheableBadRequestHttpException($cacheability, 'The diff resource does not support `include`. Every child diff is always in `included`.');
+    }
 
     $resource_type = $this->resourceTypeRepository->get($entity_type, $bundle);
     if (!$resource_type instanceof ResourceType || $resource_type->isInternal() || !$resource_type->isVersionable()) {

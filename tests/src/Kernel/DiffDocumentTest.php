@@ -20,6 +20,7 @@ use Drupal\KernelTests\KernelTestBase;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * Proves the document shape on core JSON:API's own value objects.
@@ -33,6 +34,7 @@ use PHPUnit\Framework\Attributes\Group;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class DiffDocumentTest extends KernelTestBase {
 
   /**
@@ -206,6 +208,25 @@ class DiffDocumentTest extends KernelTestBase {
     $this->assertStringEndsWith('/jsonapi/node/article/' . $this->uuid . '?' . $this->query(['resourceVersion' => 'rel:latest-version']), $data['relationships']['left']['links']['related']['href']);
     $this->assertStringEndsWith('/jsonapi/node/article/' . $this->uuid . '?' . $this->query(['resourceVersion' => 'id:2']), $data['relationships']['right']['links']['related']['href']);
     $this->assertStringEndsWith('/jsonapi/diff/node/article/' . $this->uuid . '?' . $this->query(['leftVersion' => 'rel:latest-version', 'rightVersion' => 'id:2']), $data['links']['self']['href']);
+  }
+
+  /**
+   * A side of a type without versions links nowhere and keeps its meta.
+   *
+   * JSON:API accepts resourceVersion only on a versionable resource type, so
+   * a link for a paragraph's side would answer 400.
+   */
+  public function testSideOfTypeWithoutVersionsHasNoRelatedLink(): void {
+    $unversioned = new ResourceType('node', 'article', Node::class, FALSE, TRUE, TRUE, FALSE);
+    $diff = $this->entityDiff($this->uuid, 1, 2);
+    $root = new DiffResourceObject($this->diffType, $unversioned, $diff, 'id:1', 'id:2');
+
+    $data = $this->normalize($root, [])['data'];
+
+    foreach (['left' => 1, 'right' => 2] as $side => $revision_id) {
+      $this->assertArrayNotHasKey('links', $data['relationships'][$side]);
+      $this->assertSame($revision_id, $data['relationships'][$side]['data']['meta']['drupal_internal__revision_id']);
+    }
   }
 
   /**

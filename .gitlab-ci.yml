@@ -21,5 +21,22 @@ include:
 # https://git.drupalcode.org/project/gitlab_templates/-/blob/main/includes/include.drupalci.variables.yml
 ################
 variables:
-  _SHOW_ENVIRONMENT_VARIABLES: "1"
+  OPT_IN_TEST_PREVIOUS_MINOR: 1
+  OPT_IN_TEST_NEXT_MINOR: 1
+  # The phpunit binary (_PHPUNIT_CONCURRENT: 0) loads phpunit.xml from the
+  # project root. That file is the scaffold config for local and GitHub runs.
+  # This flag points the binary at the DrupalCI config instead.
   _PHPUNIT_EXTRA: '--no-coverage --configuration=phpunit.gitlab-ci.xml'
+  # run-tests.sh (_PHPUNIT_CONCURRENT: 1, Drupal.org's default since
+  # gitlab_templates 1.17.0) uses core's phpunit config and needs no extra
+  # options. The '-' stops the template copying _PHPUNIT_EXTRA into this
+  # variable, which run-tests.sh rejects.
+  _RUNTESTS_EXTRA: '-'
+
+# Coding standards and static analysis gate a merge, rather than warn.
+cspell:
+  allow_failure: false
+phpcs:
+  allow_failure: false
+phpstan:
+  allow_failure: false

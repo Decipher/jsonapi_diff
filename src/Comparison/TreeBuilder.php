@@ -12,6 +12,7 @@ use Drupal\Component\Diff\Engine\DiffOpDelete;
 use Drupal\Component\Utility\Html;
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Entity\ContentEntityInterface;
+use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\diff\DiffBuilderManager;
 use Drupal\diff\DiffEntityParser;
@@ -78,7 +79,7 @@ final readonly class TreeBuilder {
    *   The root diff. Its cacheability covers the whole tree.
    */
   public function build(ContentEntityInterface $left, ContentEntityInterface $right, ?AccountInterface $account = NULL): EntityDiff {
-    return $this->buildEntity($left, $right, $this->compare($left, $right), new CacheableMetadata(), TRUE, $account);
+    return $this->buildEntity($left, $right, $this->compare($left, $right), new CacheableMetadata(), $account);
   }
 
   /**
@@ -163,24 +164,26 @@ final readonly class TreeBuilder {
    * @param array{left: array<string, array{label: string, values: array<int, string>}>, right: array<string, array{label: string, values: array<int, string>}>} $flat
    *   The whole flat result of the root comparison.
    * @param \Drupal\Core\Cache\CacheableMetadata $collector
-   *   The root's cacheability, which collects the whole tree.
-   * @param bool $is_root
-   *   TRUE for the root entity, whose cacheability is the collector itself.
+   *   The tree's cacheability, which collects every entity and access decision
+   *   in it. Every diff in the tree carries it, not just the root: a child is
+   *   included as a resource of its own, and JSON:API's normalization cache
+   *   keys it by type, id and language. A child varied only by its own
+   *   entities would be served to an account the tree's access decisions
+   *   filtered differently.
    * @param \Drupal\Core\Session\AccountInterface|null $account
    *   The account every access decision is taken for.
    */
-  private function buildEntity(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, CacheableMetadata $collector, bool $is_root, ?AccountInterface $account): EntityDiff {
+  private function buildEntity(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, CacheableMetadata $collector, ?AccountInterface $account): EntityDiff {
     $entity = $left ?? $right;
     assert($entity instanceof ContentEntityInterface);
     $resource_type = $this->resourceTypeRepository->get($entity->getEntityTypeId(), $entity->bundle());
 
-    $cacheability = (new CacheableMetadata())->addCacheTags(self::CONFIG_CACHE_TAGS);
+    $collector->addCacheTags(self::CONFIG_CACHE_TAGS);
     foreach ([$left, $right] as $side) {
       if ($side instanceof ContentEntityInterface) {
-        $cacheability->addCacheableDependency($side);
+        $collector->addCacheableDependency($side);
       }
     }
-    $collector->addCacheableDependency($cacheability);
 
     $fields = [];
     $left_prefix = $left instanceof ContentEntityInterface ? $this->prefixOf($left) : NULL;
@@ -201,15 +204,16 @@ final readonly class TreeBuilder {
         : ($left_entry['label'] ?? $right_entry['label'] ?? '');
       $field = $this->buildField(
         $label,
-        $left_entry['values'] ?? [],
-        $right_entry['values'] ?? [],
+        $this->guardReferences($left, $name, $left_entry['values'] ?? [], $collector, $account),
+        $this->guardReferences($right, $name, $right_entry['values'] ?? [], $collector, $account),
         !$left instanceof ContentEntityInterface,
         !$right instanceof ContentEntityInterface,
       );
       $fields[$resource_type->getPublicName($name)] = $field;
     }
-    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector, $account);
-    $fields += $this->referenceFields($children, $entity, $resource_type);
+    $recursed = [];
+    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector, $account, $recursed);
+    $fields += $this->referenceFields($recursed, $children, $entity, $resource_type);
 
     $counts = array_count_values(array_map(static fn (FieldDiff $field): string => $field->status, $fields));
     $summary = [
@@ -228,7 +232,7 @@ final readonly class TreeBuilder {
       $fields,
       $summary,
       $children,
-      $is_root ? $collector : $cacheability,
+      $collector,
       $right instanceof ContentEntityInterface && $right->uuid() !== $entity->uuid() ? (string) $right->uuid() : NULL,
     );
   }
@@ -251,6 +255,9 @@ final readonly class TreeBuilder {
    * The entry has no values, no operations and no items, which is the one
    * place a field reports none of those.
    *
+   * @param array<string, true> $recursed
+   *   The public names of the reference fields recursed into, including any
+   *   that are empty on both sides.
    * @param list<\Drupal\jsonapi_diff\Comparison\ChildDiff> $children
    *   The children of this entity.
    * @param \Drupal\Core\Entity\ContentEntityInterface $entity
@@ -261,8 +268,10 @@ final readonly class TreeBuilder {
    * @return array<string, \Drupal\jsonapi_diff\Comparison\FieldDiff>
    *   One entry per recursed reference field, keyed by public name.
    */
-  private function referenceFields(array $children, ContentEntityInterface $entity, ResourceType $resource_type): array {
-    $statuses = [];
+  private function referenceFields(array $recursed, array $children, ContentEntityInterface $entity, ResourceType $resource_type): array {
+    // Every recursed field starts out the same, so one empty on both sides
+    // still has its entry. Its children then decide whether it changed.
+    $statuses = array_fill_keys(array_keys($recursed), FieldDiff::SAME);
     foreach ($children as $child) {
       $changed = ($statuses[$child->field] ?? FieldDiff::SAME) === FieldDiff::CHANGED
         || $child->status !== ChildDiff::SAME;
@@ -504,11 +513,14 @@ final readonly class TreeBuilder {
    *   Collects the cacheability of every access decision taken here.
    * @param \Drupal\Core\Session\AccountInterface|null $account
    *   The account every access decision is taken for.
+   * @param array<string, true> $recursed
+   *   Collects the public name of every reference field recursed into, past
+   *   its access check, whether or not it holds any children.
    *
    * @return list<\Drupal\jsonapi_diff\Comparison\ChildDiff>
    *   The children.
    */
-  private function buildChildren(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, ResourceType $resource_type, CacheableMetadata $collector, ?AccountInterface $account): array {
+  private function buildChildren(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, ResourceType $resource_type, CacheableMetadata $collector, ?AccountInterface $account, array &$recursed): array {
     $entity = $left ?? $right;
     assert($entity instanceof ContentEntityInterface);
     $children = [];
@@ -532,6 +544,9 @@ final readonly class TreeBuilder {
       $left_children = array_diff_key($left_children, $denied);
       $right_children = array_diff_key($right_children, $denied);
       $public_name = $resource_type->getPublicName($name);
+      // Recorded even when both sides are empty, so the field still gets
+      // its entry.
+      $recursed[$public_name] = TRUE;
       $pairs = $this->pairByPosition(
         array_diff_key($left_children, $right_children),
         array_diff_key($right_children, $left_children),
@@ -545,20 +560,20 @@ final readonly class TreeBuilder {
         if (isset($right_children[$id])) {
           [$right_delta, $right_child] = $right_children[$id];
           $status = $left_delta === $right_delta ? ChildDiff::SAME : ChildDiff::MOVED;
-          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, ChildDiff::MATCH_ID, $this->buildEntity($left_child, $right_child, $flat, $collector, FALSE, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, ChildDiff::MATCH_ID, $this->buildEntity($left_child, $right_child, $flat, $collector, $account));
         }
         elseif (isset($pairs[$id])) {
           // A positional pair sits at one delta on both sides, so its
           // status is always `same`. What changed is inside the pair.
           [$right_delta, $right_child] = $right_children[$pairs[$id]];
-          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, ChildDiff::SAME, ChildDiff::MATCH_POSITION, $this->buildEntity($left_child, $right_child, $flat, $collector, FALSE, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, ChildDiff::SAME, ChildDiff::MATCH_POSITION, $this->buildEntity($left_child, $right_child, $flat, $collector, $account));
         }
         else {
-          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, ChildDiff::MATCH_NONE, $this->buildEntity($left_child, NULL, $flat, $collector, FALSE, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, ChildDiff::MATCH_NONE, $this->buildEntity($left_child, NULL, $flat, $collector, $account));
         }
       }
       foreach (array_diff_key($right_children, $left_children, $claimed) as [$right_delta, $right_child]) {
-        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, ChildDiff::MATCH_NONE, $this->buildEntity(NULL, $right_child, $flat, $collector, FALSE, $account));
+        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, ChildDiff::MATCH_NONE, $this->buildEntity(NULL, $right_child, $flat, $collector, $account));
       }
     }
     return $children;
@@ -753,6 +768,8 @@ final readonly class TreeBuilder {
       if (!$child instanceof ContentEntityInterface) {
         continue;
       }
+      // Judge, compare and serve the translation the comparison reads.
+      $child = $this->entityViewCheck->compared($child);
       if (!$this->isServable($child, $collector, $account)) {
         $denied[$child->id()] = TRUE;
         continue;
@@ -760,6 +777,53 @@ final readonly class TreeBuilder {
       $children[$child->id()] = [(int) $delta, $child];
     }
     return $children;
+  }
+
+  /**
+   * Hides the label of every referenced entity the account may not view.
+   *
+   * Diff renders an entity reference, file or image item as its target's
+   * label or file name, with no access check on the target. JSON:API would
+   * serve only an identifier for a target the account may not view, so the
+   * value of such an item falls back to the target's id, which is what Diff
+   * itself shows when it compares ids. The target's cacheability is
+   * collected either way, so a renamed target is not served stale.
+   *
+   * @param \Drupal\Core\Entity\ContentEntityInterface|null $side
+   *   The revision of this side, or NULL when the side lacks the entity.
+   * @param string $name
+   *   The field name.
+   * @param array<int, string> $values
+   *   The field's value per delta, as Diff rendered it.
+   * @param \Drupal\Core\Cache\CacheableMetadata $collector
+   *   Collects the cacheability of every target and access decision.
+   * @param \Drupal\Core\Session\AccountInterface|null $account
+   *   The account every access decision is taken for.
+   *
+   * @return array<int, string>
+   *   The values, with each hidden label replaced by its target's id.
+   */
+  private function guardReferences(?ContentEntityInterface $side, string $name, array $values, CacheableMetadata $collector, ?AccountInterface $account): array {
+    if (!$side instanceof ContentEntityInterface || !$side->hasField($name)) {
+      return $values;
+    }
+    $type = $side->getFieldDefinition($name)?->getType();
+    if (!in_array($type, ['entity_reference', 'file', 'image'], TRUE)) {
+      return $values;
+    }
+    foreach ($side->get($name) as $delta => $item) {
+      $target = $item->entity ?? NULL;
+      if (!$target instanceof EntityInterface || !isset($values[$delta])) {
+        continue;
+      }
+      $collector->addCacheableDependency($target);
+      $access = $target->access('view label', $account, TRUE);
+      $collector->addCacheableDependency($access);
+      if (!$access->isAllowed()) {
+        $values[$delta] = (string) $target->id();
+      }
+    }
+    return $values;
   }
 
   /**

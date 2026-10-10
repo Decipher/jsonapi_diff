@@ -149,7 +149,7 @@ leaves its segment empty.
 | `status` | `added`, `removed`, `changed` or `same` |
 | `left`, `right` | That side's value as one string |
 | `ops` | Line operations, each `{type, lines}` where `type` is `=`, `-` or `+` |
-| `items` | The same keys again per item of the field, each with its `delta` |
+| `items` | One entry per item of the field: `delta`, `status`, `left`, `right` and `ops` |
 
 A changed line arrives as a `-` followed by a `+`, which is the pair a client
 needs to run its own word diff. A field of cardinality one reports one item at
@@ -195,7 +195,8 @@ every descendant's counts, so on a page built from paragraphs the two differ.
 
 A sparse fieldset trims each diff in the document, the nested ones included:
 `?fields[jsonapi_diff--diff]=tree_summary` returns the counts alone. `?include`
-is ignored, because the tree is already whole.
+is refused with a `400`, because the tree is already whole: every child diff is
+always in `included`.
 
 Each response includes the cache tags of both revisions and every entity in the
 tree, Diff's configuration tags, and cache contexts for the two version
@@ -244,7 +245,9 @@ those items as referenced entities, which are matched by entity id.
 
 **A positional pair is an inference.** Children that no id matched are paired at
 one delta of one field, when they share an entity type and bundle and their text
-agrees by at least half its words. That reads a page which kept its
+agrees by at least half its words. Two children with no text at all skip only
+the word check, and still need the same entity type, bundle, field and delta.
+That reads a page which kept its
 shape. An insertion moves the blocks after it, and a rewritten block no longer
 agrees, so both fall back to a removal and an addition. `match: position` marks
 every inference.
@@ -268,6 +271,12 @@ type.
 **A:** The client this was built for renders the page from the same data, so
 sending it once saves a request. For the tree's shape alone, ask for
 `fields[jsonapi_diff--diff]=tree_summary,children` and walk the counts.
+
+A child matched by id on both sides has a `self` link to its own diff, so its
+fields can be fetched later. An added or removed child has none, and nor does a
+child paired by position (`match: position`), because the route compares two
+versions of one entity and those name one entity or two. For their fields, ask
+for the parent's diff without the fieldset.
 
 ## Maintainers
 

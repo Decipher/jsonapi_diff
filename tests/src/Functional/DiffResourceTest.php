@@ -15,6 +15,7 @@ use Drupal\user\Entity\Role;
 use Drupal\user\RoleInterface;
 use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * Tests the diff route over real HTTP.
@@ -26,6 +27,7 @@ use PHPUnit\Framework\Attributes\Group;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class DiffResourceTest extends BrowserTestBase {
 
   use DiffContentTrait;
@@ -269,8 +271,14 @@ class DiffResourceTest extends BrowserTestBase {
     $this->assertSame(0, $document['data']['attributes']['summary']['changed']);
     foreach ($document['data']['attributes']['fields'] as $name => $field) {
       $this->assertSame('same', $field['status'], $name);
-      // A field's items agree with the field, and every field on this node
-      // takes one value, reported at delta 0.
+      // A recursed reference field has an entry of its own, even when empty,
+      // and that entry never has items.
+      if ($name === 'field_blocks') {
+        $this->assertSame([], $field['items']);
+        continue;
+      }
+      // A field's items agree with the field, and every other field on this
+      // node takes one value, reported at delta 0.
       $this->assertSame([0], array_column($field['items'], 'delta'), $name);
       $this->assertSame(['same'], array_column($field['items'], 'status'), $name);
     }
@@ -591,6 +599,30 @@ class DiffResourceTest extends BrowserTestBase {
     $english = $this->fetch($this->path($node), $query);
     $this->assertSame('Hello', $english['data']['attributes']['fields']['field_text']['left']);
     $this->assertSame('same', $english['data']['attributes']['fields']['field_text']['status']);
+  }
+
+  /**
+   * An unpublished translation is judged as itself, not by its source.
+   *
+   * Translations are published apart. The diff reads the content language's
+   * translation, so access is taken on that translation: a published English
+   * node does not let a visitor read its unpublished French draft.
+   */
+  public function testUnpublishedTranslationIsDenied(): void {
+    ConfigurableLanguage::createFromLangcode('fr')->save();
+    $this->container->get('content_translation.manager')->setEnabled('node', 'article', TRUE);
+    $this->rebuildContainer();
+    $this->container->get('router.builder')->rebuild();
+
+    $node = $this->createArticle(['field_text' => 'Hello', 'uid' => $this->editor->id()]);
+    $node->addTranslation('fr', ['title' => 'Article', 'field_text' => 'Secret French draft', 'status' => 0, 'uid' => $this->editor->id()])->save();
+
+    $this->fetch($this->path($node), []);
+    $this->assertSession()->statusCodeEquals(200);
+
+    $this->fetch('/fr' . $this->path($node), []);
+    $this->assertSession()->statusCodeEquals(403);
+    $this->assertSession()->responseNotContains('Secret French draft');
   }
 
   /**

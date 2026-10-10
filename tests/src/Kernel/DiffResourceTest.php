@@ -17,6 +17,7 @@ use Drupal\Tests\jsonapi_diff\Traits\DiffContentTrait;
 use Drupal\Tests\user\Traits\UserCreationTrait;
 use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Event\ResponseEvent;
@@ -33,6 +34,7 @@ use Symfony\Component\Routing\Route;
  * @group jsonapi_diff
  */
 #[Group('jsonapi_diff')]
+#[RunTestsInSeparateProcesses]
 class DiffResourceTest extends KernelTestBase {
 
   use DiffContentTrait;
@@ -92,6 +94,9 @@ class DiffResourceTest extends KernelTestBase {
     // The links and the access checker need the routes.
     $this->container->get('router.builder')->rebuild();
 
+    // User 1 bypasses access in a kernel test, so it is spent on a
+    // placeholder and the editor's permissions are the ones that count.
+    $this->createUser([], 'placeholder');
     $this->editor = $this->asAccount($this->createUser([
       'access content',
       'view own unpublished content',
@@ -315,15 +320,13 @@ class DiffResourceTest extends KernelTestBase {
       'url.query_args:leftVersion',
       'url.query_args:rightVersion',
       'url.query_args:fields',
+      'url.query_args:include',
       'user.permissions',
       'languages:language_content',
     ];
     foreach ($expected as $context) {
       $this->assertContains($context, $metadata->getCacheContexts());
     }
-    // The document is the whole tree whatever `include` asks for, so the
-    // response does not vary by it.
-    $this->assertNotContains('url.query_args:include', $metadata->getCacheContexts());
     $this->assertContains('node:' . $node->id(), $metadata->getCacheTags());
     foreach ($blocks as $block) {
       $this->assertContains('paragraph:' . $block->id(), $metadata->getCacheTags());
@@ -339,6 +342,25 @@ class DiffResourceTest extends KernelTestBase {
 
     $this->expectException(CacheableBadRequestHttpException::class);
     $this->respond($node, ['leftVersion' => '12']);
+  }
+
+  /**
+   * An include is refused, because the document always holds the whole tree.
+   *
+   * The JSON:API specification requires a 400 for an include a server does
+   * not support. The refusal varies by the parameter, so a cached 400 never
+   * answers a request without it.
+   */
+  public function testIncludeIsRefused(): void {
+    $node = $this->createArticle(['uid' => $this->editor->id()]);
+
+    try {
+      $this->respond($node, ['include' => 'left']);
+      $this->fail('An include was accepted.');
+    }
+    catch (CacheableBadRequestHttpException $exception) {
+      $this->assertContains('url.query_args:include', $exception->getCacheContexts());
+    }
   }
 
   /**
