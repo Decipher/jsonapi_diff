@@ -152,9 +152,16 @@ leaves its segment empty.
 | `items` | The same keys again per item of the field, each with its `delta` |
 
 A changed line arrives as a `-` followed by a `+`, which is the pair a client
-needs to run its own word diff. Every field has `items`, including a field of
-cardinality one, which reports one item at delta 0. A field's `status` follows
-from its items: the status they share, or `changed` when they differ.
+needs to run its own word diff. A field of cardinality one reports one item at
+delta 0, and a field's `status` follows from its items: the status they share, or
+`changed` when they differ.
+
+A reference field the comparison recursed into is the exception. Its entry answers
+whether the list changed, and its values, operations and items are all empty. The
+`status` describes the list alone: `changed` when a child was added, removed or
+moved, and `same` when every child stayed where it was. An edit inside a child
+leaves the list `same` and reaches the counts through that child, so nothing
+counts twice.
 
 The module does not add markup. Diff builds each side with the field's own
 plugin, so a formatted text field arrives with its HTML and a date field arrives

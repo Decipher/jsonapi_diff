@@ -61,6 +61,17 @@ trait DiffContentTrait {
   }
 
   /**
+   * Creates a paragraph type with no fields at all.
+   *
+   * Diff parses nothing for it and it recurses into nothing, so its diff
+   * reports an empty `fields` map. That is the one shape which proves the
+   * map serialises as a JSON object rather than an array.
+   */
+  protected function createBareParagraphType(): void {
+    ParagraphsType::create(['id' => 'bare', 'label' => 'Bare'])->save();
+  }
+
+  /**
    * Creates and saves a group paragraph holding the given paragraphs.
    */
   protected function createGroup(ParagraphInterface ...$children): ParagraphInterface {

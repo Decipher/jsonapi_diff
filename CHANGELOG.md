@@ -31,6 +31,9 @@ First release.
   operations, and the same per item of the field with its delta.
 - `attributes.summary` and `attributes.tree_summary`, counting the entity's own
   fields and the whole subtree by status.
+- An entry in `attributes.fields` for each reference field the comparison
+  recursed into, whose status says whether the list changed. A reorder, and a
+  child that reports no fields of its own, reach the counts through it.
 - Positional alignment of the children no entity id matched, so a draft that
   replaced its paragraphs with new entities reports the block it edited. A pair
   sits at one delta of one field, shares an entity type and bundle, and agrees on
