@@ -119,7 +119,7 @@ final class DiffResource extends ResourceBase implements ContainerInjectionInter
     $pair = $this->revisionPairResolver->resolve($entity, $this->version($request, DiffResourceObject::LEFT_PARAMETER), $this->version($request, DiffResourceObject::RIGHT_PARAMETER));
     // The tree is judged for the account the pair was judged for, so one
     // account decides the whole document.
-    $tree = $this->treeBuilder->build($pair->left, $pair->right, $pair->account);
+    $tree = $this->treeBuilder->build($pair->left, $pair->right, $pair->account, $pair->leftToken, $pair->rightToken);
 
     $language = $this->languageManager->getCurrentLanguage(LanguageInterface::TYPE_CONTENT);
     $root = new DiffResourceObject($diff_type, $resource_type, $tree, $pair->leftVersion, $pair->rightVersion, $language);
@@ -186,12 +186,25 @@ final class DiffResource extends ResourceBase implements ContainerInjectionInter
         $diff_type,
         $entity_type,
         $child->diff,
-        $child->diff->leftRevisionId === NULL ? NULL : 'id:' . $child->diff->leftRevisionId,
-        $child->diff->rightRevisionId === NULL ? NULL : 'id:' . $child->diff->rightRevisionId,
+        $this->versionOf($child->diff->leftRevisionId, $child->diff->leftToken),
+        $this->versionOf($child->diff->rightRevisionId, $child->diff->rightToken),
         $language,
       );
       $this->collectIncluded($diff_type, $child->diff, $language, $included);
     }
+  }
+
+  /**
+   * Returns the version identifier of one side of an included diff.
+   *
+   * A side read from an unsaved preview is the preview, whatever revision it
+   * started from. A stored side is its revision.
+   */
+  private function versionOf(?int $revision_id, ?string $token): ?string {
+    if ($token !== NULL) {
+      return RevisionPairResolver::PREVIEW;
+    }
+    return $revision_id === NULL ? NULL : 'id:' . $revision_id;
   }
 
   /**
