@@ -152,8 +152,9 @@ final readonly class RevisionPairResolver {
    *
    * @return array{\Drupal\Core\Entity\ContentEntityInterface, string}
    *   The preview entity, and a token naming this preview. The token is a
-   *   hash of the temp store entry's owner and time, so diff ids differ from
-   *   every stored revision's and from any other editor's preview.
+   *   digest of the temp store entry's owner and stored form state, so diff
+   *   ids differ from every stored revision's, from any other editor's
+   *   preview, and from this editor's earlier previews.
    *
    * @throws \Drupal\Core\Http\Exception\CacheableBadRequestHttpException
    *   When the entity is not a node. Core keeps previews only for nodes.
@@ -177,8 +178,12 @@ final readonly class RevisionPairResolver {
       throw new CacheableNotFoundHttpException($cacheability, 'No preview of this node is in progress for the current user.');
     }
 
+    // The token digests the stored form state itself, before any temporary
+    // id is given, so every write of the preview gets its own. The store's
+    // timestamp alone has whole seconds, and two previews saved in the same
+    // second would share it.
+    $token = 'preview-' . substr(hash('sha256', $metadata->getOwnerId() . ':' . $uuid . ':' . serialize($form_state)), 0, 12);
     $this->nameUnsavedEntities($preview);
-    $token = 'preview-' . substr(hash('sha256', $metadata->getOwnerId() . ':' . $metadata->getUpdated() . ':' . $uuid), 0, 12);
     return [$this->entityViewCheck->compared($preview), $token];
   }
 

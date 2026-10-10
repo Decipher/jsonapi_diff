@@ -400,6 +400,21 @@ class DiffResourceTest extends KernelTestBase {
   }
 
   /**
+   * Each preview of a node gets its own id, even within the same second.
+   */
+  public function testEachPreviewHasItsOwnId(): void {
+    $node = $this->createArticle(['uid' => $this->editor->id(), 'field_text' => 'saved text']);
+    $ids = [];
+    foreach (['first preview', 'second preview'] as $text) {
+      $preview = $this->loadNodeRevision((int) $node->getRevisionId());
+      $preview->set('field_text', $text);
+      $this->storePreview($preview);
+      $ids[] = Json::decode((string) $this->respond($node, ['rightVersion' => 'rel:preview'])->getContent())['data']['id'];
+    }
+    $this->assertNotSame($ids[0], $ids[1]);
+  }
+
+  /**
    * Without a preview in progress, rel:preview names nothing.
    */
   public function testPreviewWithoutOneIsNotFound(): void {
