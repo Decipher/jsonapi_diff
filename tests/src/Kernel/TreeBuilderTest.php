@@ -411,6 +411,19 @@ class TreeBuilderTest extends KernelTestBase {
   }
 
   /**
+   * A list empty on both sides still has its entry, and counts as same.
+   */
+  public function testAnEmptyListOnBothSidesHasItsEntry(): void {
+    [$left, $right] = $this->revise($this->createNode(['field_text' => 'text']), ['field_text' => 'changed text']);
+
+    $diff = $this->builder->build($left, $right);
+
+    $this->assertArrayHasKey('field_blocks', $diff->fields);
+    $this->assertSame(FieldDiff::SAME, $diff->fields['field_blocks']->status);
+    $this->assertSame([], $diff->children);
+  }
+
+  /**
    * An edit inside a block leaves the list alone, so nothing counts twice.
    */
   public function testAnEditInsideBlockLeavesTheListSame(): void {

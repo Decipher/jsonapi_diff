@@ -211,8 +211,9 @@ final readonly class TreeBuilder {
       );
       $fields[$resource_type->getPublicName($name)] = $field;
     }
-    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector, $account);
-    $fields += $this->referenceFields($children, $entity, $resource_type);
+    $recursed = [];
+    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector, $account, $recursed);
+    $fields += $this->referenceFields($recursed, $children, $entity, $resource_type);
 
     $counts = array_count_values(array_map(static fn (FieldDiff $field): string => $field->status, $fields));
     $summary = [
@@ -254,6 +255,9 @@ final readonly class TreeBuilder {
    * The entry has no values, no operations and no items, which is the one
    * place a field reports none of those.
    *
+   * @param array<string, true> $recursed
+   *   The public names of the reference fields recursed into, including any
+   *   that are empty on both sides.
    * @param list<\Drupal\jsonapi_diff\Comparison\ChildDiff> $children
    *   The children of this entity.
    * @param \Drupal\Core\Entity\ContentEntityInterface $entity
@@ -264,8 +268,10 @@ final readonly class TreeBuilder {
    * @return array<string, \Drupal\jsonapi_diff\Comparison\FieldDiff>
    *   One entry per recursed reference field, keyed by public name.
    */
-  private function referenceFields(array $children, ContentEntityInterface $entity, ResourceType $resource_type): array {
-    $statuses = [];
+  private function referenceFields(array $recursed, array $children, ContentEntityInterface $entity, ResourceType $resource_type): array {
+    // Every recursed field starts out the same, so one empty on both sides
+    // still has its entry. Its children then decide whether it changed.
+    $statuses = array_fill_keys(array_keys($recursed), FieldDiff::SAME);
     foreach ($children as $child) {
       $changed = ($statuses[$child->field] ?? FieldDiff::SAME) === FieldDiff::CHANGED
         || $child->status !== ChildDiff::SAME;
@@ -507,11 +513,14 @@ final readonly class TreeBuilder {
    *   Collects the cacheability of every access decision taken here.
    * @param \Drupal\Core\Session\AccountInterface|null $account
    *   The account every access decision is taken for.
+   * @param array<string, true> $recursed
+   *   Collects the public name of every reference field recursed into, past
+   *   its access check, whether or not it holds any children.
    *
    * @return list<\Drupal\jsonapi_diff\Comparison\ChildDiff>
    *   The children.
    */
-  private function buildChildren(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, ResourceType $resource_type, CacheableMetadata $collector, ?AccountInterface $account): array {
+  private function buildChildren(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, ResourceType $resource_type, CacheableMetadata $collector, ?AccountInterface $account, array &$recursed): array {
     $entity = $left ?? $right;
     assert($entity instanceof ContentEntityInterface);
     $children = [];
@@ -535,6 +544,9 @@ final readonly class TreeBuilder {
       $left_children = array_diff_key($left_children, $denied);
       $right_children = array_diff_key($right_children, $denied);
       $public_name = $resource_type->getPublicName($name);
+      // Recorded even when both sides are empty, so the field still gets
+      // its entry.
+      $recursed[$public_name] = TRUE;
       $pairs = $this->pairByPosition(
         array_diff_key($left_children, $right_children),
         array_diff_key($right_children, $left_children),
