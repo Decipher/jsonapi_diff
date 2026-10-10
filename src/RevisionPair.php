@@ -35,6 +35,12 @@ final readonly class RevisionPair {
    *   The cacheability of the resolution and both access decisions.
    * @param \Drupal\Core\Session\AccountInterface|null $account
    *   The account both sides were checked for, or NULL for the current user.
+   * @param string|null $leftToken
+   *   For an unsaved preview on the left, a token naming that preview, which
+   *   stands in for the revision id in every diff id on that side. NULL for
+   *   a stored revision.
+   * @param string|null $rightToken
+   *   The same for the right side.
    */
   public function __construct(
     public ContentEntityInterface $left,
@@ -43,6 +49,8 @@ final readonly class RevisionPair {
     public string $rightVersion,
     public CacheableMetadata $cacheability,
     public ?AccountInterface $account = NULL,
+    public ?string $leftToken = NULL,
+    public ?string $rightToken = NULL,
   ) {}
 
 }

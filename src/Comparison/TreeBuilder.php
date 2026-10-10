@@ -74,12 +74,19 @@ final readonly class TreeBuilder {
    *   The account the two revisions were judged for, or NULL for the
    *   current user. Every entity and field below them is judged for the
    *   same account, so one account decides the whole document.
+   * @param string|null $leftToken
+   *   A token naming an unsaved preview on the left, which stands in for the
+   *   revision id in the id of every diff on that side. NULL for a stored
+   *   revision.
+   * @param string|null $rightToken
+   *   The same for the right side.
    *
    * @return \Drupal\jsonapi_diff\Comparison\EntityDiff
    *   The root diff. Its cacheability covers the whole tree.
    */
-  public function build(ContentEntityInterface $left, ContentEntityInterface $right, ?AccountInterface $account = NULL): EntityDiff {
-    return $this->buildEntity($left, $right, $this->compare($left, $right), new CacheableMetadata(), $account);
+  public function build(ContentEntityInterface $left, ContentEntityInterface $right, ?AccountInterface $account = NULL, ?string $leftToken = NULL, ?string $rightToken = NULL): EntityDiff {
+    $tokens = [$leftToken, $rightToken];
+    return $this->buildEntity($left, $right, $this->compare($left, $right), new CacheableMetadata(), $account, $tokens);
   }
 
   /**
@@ -172,8 +179,10 @@ final readonly class TreeBuilder {
    *   filtered differently.
    * @param \Drupal\Core\Session\AccountInterface|null $account
    *   The account every access decision is taken for.
+   * @param array{string|null, string|null} $tokens
+   *   The left and right preview tokens, or NULL for a stored revision.
    */
-  private function buildEntity(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, CacheableMetadata $collector, ?AccountInterface $account): EntityDiff {
+  private function buildEntity(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, CacheableMetadata $collector, ?AccountInterface $account, array $tokens): EntityDiff {
     $entity = $left ?? $right;
     assert($entity instanceof ContentEntityInterface);
     $resource_type = $this->resourceTypeRepository->get($entity->getEntityTypeId(), $entity->bundle());
@@ -212,7 +221,7 @@ final readonly class TreeBuilder {
       $fields[$resource_type->getPublicName($name)] = $field;
     }
     $recursed = [];
-    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector, $account, $recursed);
+    $children = $this->buildChildren($left, $right, $flat, $resource_type, $collector, $account, $tokens, $recursed);
     $fields += $this->referenceFields($recursed, $children, $entity, $resource_type);
 
     $counts = array_count_values(array_map(static fn (FieldDiff $field): string => $field->status, $fields));
@@ -227,14 +236,26 @@ final readonly class TreeBuilder {
       $entity->getEntityTypeId(),
       $entity->bundle(),
       (string) $entity->uuid(),
-      $left instanceof ContentEntityInterface ? (int) $left->getRevisionId() : NULL,
-      $right instanceof ContentEntityInterface ? (int) $right->getRevisionId() : NULL,
+      $this->revisionIdOf($left),
+      $this->revisionIdOf($right),
       $fields,
       $summary,
       $children,
       $collector,
       $right instanceof ContentEntityInterface && $right->uuid() !== $entity->uuid() ? (string) $right->uuid() : NULL,
+      $left instanceof ContentEntityInterface ? $tokens[0] : NULL,
+      $right instanceof ContentEntityInterface ? $tokens[1] : NULL,
     );
+  }
+
+  /**
+   * Returns a side's revision id, or NULL when it has none.
+   *
+   * A paragraph added in an unsaved preview has no revision yet.
+   */
+  private function revisionIdOf(?ContentEntityInterface $side): ?int {
+    $id = $side?->getRevisionId();
+    return $id === NULL ? NULL : (int) $id;
   }
 
   /**
@@ -513,6 +534,8 @@ final readonly class TreeBuilder {
    *   Collects the cacheability of every access decision taken here.
    * @param \Drupal\Core\Session\AccountInterface|null $account
    *   The account every access decision is taken for.
+   * @param array{string|null, string|null} $tokens
+   *   The left and right preview tokens, or NULL for a stored revision.
    * @param array<string, true> $recursed
    *   Collects the public name of every reference field recursed into, past
    *   its access check, whether or not it holds any children.
@@ -520,7 +543,7 @@ final readonly class TreeBuilder {
    * @return list<\Drupal\jsonapi_diff\Comparison\ChildDiff>
    *   The children.
    */
-  private function buildChildren(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, ResourceType $resource_type, CacheableMetadata $collector, ?AccountInterface $account, array &$recursed): array {
+  private function buildChildren(?ContentEntityInterface $left, ?ContentEntityInterface $right, array $flat, ResourceType $resource_type, CacheableMetadata $collector, ?AccountInterface $account, array $tokens, array &$recursed): array {
     $entity = $left ?? $right;
     assert($entity instanceof ContentEntityInterface);
     $children = [];
@@ -560,20 +583,20 @@ final readonly class TreeBuilder {
         if (isset($right_children[$id])) {
           [$right_delta, $right_child] = $right_children[$id];
           $status = $left_delta === $right_delta ? ChildDiff::SAME : ChildDiff::MOVED;
-          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, ChildDiff::MATCH_ID, $this->buildEntity($left_child, $right_child, $flat, $collector, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, $status, ChildDiff::MATCH_ID, $this->buildEntity($left_child, $right_child, $flat, $collector, $account, $tokens));
         }
         elseif (isset($pairs[$id])) {
           // A positional pair sits at one delta on both sides, so its
           // status is always `same`. What changed is inside the pair.
           [$right_delta, $right_child] = $right_children[$pairs[$id]];
-          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, ChildDiff::SAME, ChildDiff::MATCH_POSITION, $this->buildEntity($left_child, $right_child, $flat, $collector, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, $right_delta, ChildDiff::SAME, ChildDiff::MATCH_POSITION, $this->buildEntity($left_child, $right_child, $flat, $collector, $account, $tokens));
         }
         else {
-          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, ChildDiff::MATCH_NONE, $this->buildEntity($left_child, NULL, $flat, $collector, $account));
+          $children[] = new ChildDiff($public_name, $left_delta, NULL, ChildDiff::REMOVED, ChildDiff::MATCH_NONE, $this->buildEntity($left_child, NULL, $flat, $collector, $account, $tokens));
         }
       }
       foreach (array_diff_key($right_children, $left_children, $claimed) as [$right_delta, $right_child]) {
-        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, ChildDiff::MATCH_NONE, $this->buildEntity(NULL, $right_child, $flat, $collector, $account));
+        $children[] = new ChildDiff($public_name, NULL, $right_delta, ChildDiff::ADDED, ChildDiff::MATCH_NONE, $this->buildEntity(NULL, $right_child, $flat, $collector, $account, $tokens));
       }
     }
     return $children;

@@ -55,6 +55,12 @@ final readonly class EntityDiff {
    *   entity, which is every comparison matched by entity id. It is set
    *   only by the positional pass, which pairs two entities the two sides
    *   hold in the same place.
+   * @param string|null $leftToken
+   *   A token naming the unsaved preview the left side was read from. It
+   *   stands in for the left revision id in the diff's id, and marks the
+   *   side as a preview. NULL for a stored revision or an absent side.
+   * @param string|null $rightToken
+   *   The same for the right side.
    */
   public function __construct(
     public string $entityTypeId,
@@ -67,6 +73,8 @@ final readonly class EntityDiff {
     public array $children,
     public CacheableMetadata $cacheability,
     public ?string $rightUuid = NULL,
+    public ?string $leftToken = NULL,
+    public ?string $rightToken = NULL,
   ) {
     $this->treeSummary = $this->rollUp($summary, $children);
   }

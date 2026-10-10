@@ -86,8 +86,8 @@ and resolved by core's negotiator.
 
 | Parameter | Default | Accepts |
 | --- | --- | --- |
-| `leftVersion` | `rel:latest-version` | `id:<revision id>`, `rel:latest-version`, `rel:working-copy` |
-| `rightVersion` | `rel:working-copy` | The same three forms |
+| `leftVersion` | `rel:latest-version` | `id:<revision id>`, `rel:latest-version`, `rel:working-copy`, `rel:preview` |
+| `rightVersion` | `rel:working-copy` | The same four forms |
 
 `rel:latest-version` is the newest default revision, which on an ordinary site is
 the published one. `rel:working-copy` is the newest revision of all. So the bare
@@ -102,6 +102,27 @@ curl -H 'Accept: application/vnd.api+json' \
 `ops` is an addition on the right. Comparing a revision with itself is allowed,
 and every field comes back `same`. The comparison uses the current content
 language, the same as core JSON:API, one language per request.
+
+### Comparing an unsaved preview
+
+`rel:preview` is the node the current user is previewing: what core's node form
+keeps when the editor presses Preview, before anything is saved. It follows
+core's grammar, but only this route resolves it. Core JSON:API keeps no such
+version.
+
+```
+GET /jsonapi/diff/node/article/{uuid}?leftVersion=rel:latest-version&rightVersion=rel:preview
+```
+
+- Only nodes have a preview. Any other entity type is a `400`.
+- The preview is private to the editor who made it. Without one in progress
+  for the current user, the answer is a `404`.
+- Edited and unsaved paragraphs compare like any others. An unsaved paragraph
+  has no revision yet, so it reads as `added`, and its side's meta carries a
+  `null` revision id.
+- A side read from the preview carries `resourceVersion: rel:preview` in its
+  meta, and links nowhere. Its diff ids end in a preview token, not a revision
+  id, and the response is never cached.
 
 The parameter names include a capital letter because core rejects an
 all-lowercase custom query parameter on every JSON:API route, and core's own

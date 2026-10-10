@@ -18,6 +18,7 @@ use Drupal\jsonapi_diff\Comparison\ChildDiff;
 use Drupal\jsonapi_diff\Comparison\EntityDiff;
 use Drupal\jsonapi_diff\Comparison\FieldDiff;
 use Drupal\jsonapi_diff\Comparison\ItemDiff;
+use Drupal\jsonapi_diff\RevisionPairResolver;
 
 /**
  * The JSON:API resource object of one entity's diff.
@@ -99,8 +100,10 @@ final class DiffResourceObject extends ResourceObject {
    */
   public function __construct(ResourceType $diff_type, ResourceType $entity_type, EntityDiff $diff, ?string $left_version, ?string $right_version, ?LanguageInterface $language = NULL) {
     assert($diff_type->getTypeName() === self::TYPE_NAME);
-    assert(($left_version === NULL) === ($diff->leftRevisionId === NULL));
-    assert(($right_version === NULL) === ($diff->rightRevisionId === NULL));
+    // A side is present when it has a revision, or is an unsaved preview,
+    // where an added paragraph has no revision yet.
+    assert(($left_version === NULL) === ($diff->leftRevisionId === NULL && $diff->leftToken === NULL));
+    assert(($right_version === NULL) === ($diff->rightRevisionId === NULL && $diff->rightToken === NULL));
 
     // The relationships take this object as their context before the parent
     // constructor runs. Relationship::__construct() only stores the
@@ -139,9 +142,11 @@ final class DiffResourceObject extends ResourceObject {
 
     // A pair of two entities has no route of its own. The diff route
     // compares two revisions of one entity, so a self link would name a
-    // different comparison from the one this resource holds.
+    // different comparison from the one this resource holds. A preview is
+    // kept only for a node, so a child read from one has no route either.
     $links = [];
-    if ($left_version !== NULL && $right_version !== NULL && $diff->rightUuid === NULL) {
+    $previewed = in_array(RevisionPairResolver::PREVIEW, [$left_version, $right_version], TRUE);
+    if ($left_version !== NULL && $right_version !== NULL && $diff->rightUuid === NULL && (!$previewed || $diff->entityTypeId === 'node')) {
       $url = Url::fromRoute('jsonapi_diff.diff', [
         'entity_type' => $diff->entityTypeId,
         'bundle' => $diff->bundle,
@@ -168,7 +173,9 @@ final class DiffResourceObject extends ResourceObject {
    * place on one side, so the id stays unique inside the document.
    */
   public static function idFor(EntityDiff $diff): string {
-    return sprintf('%s:%s:%s', $diff->uuid, $diff->leftRevisionId ?? '', $diff->rightRevisionId ?? '');
+    // A preview side is named by its token, never its base revision id, so
+    // its normalization is never cached under a stored diff's id.
+    return sprintf('%s:%s:%s', $diff->uuid, $diff->leftToken ?? $diff->leftRevisionId ?? '', $diff->rightToken ?? $diff->rightRevisionId ?? '');
   }
 
   /**
@@ -208,7 +215,8 @@ final class DiffResourceObject extends ResourceObject {
    * A side the entity is absent from has `data: null` and no links.
    */
   private function side(string $name, ResourceType $entity_type, string $uuid, ?int $revision_id, ?string $version): DiffRelationship {
-    if ($revision_id === NULL || $version === NULL) {
+    $preview = $version === RevisionPairResolver::PREVIEW;
+    if ($version === NULL || ($revision_id === NULL && !$preview)) {
       return DiffRelationship::create($this, $name, [], 1);
     }
     $identifier = new ResourceIdentifier($entity_type, $uuid, [
@@ -219,7 +227,9 @@ final class DiffResourceObject extends ResourceObject {
     // JSON:API accepts resourceVersion only on a versionable resource type.
     // For any other, such as a paragraph, the identifier's meta carries the
     // revision id and a link would answer 400.
-    if (!$entity_type->isInternal() && $entity_type->isVersionable()) {
+    // Core JSON:API keeps no `rel:preview` version, so a preview links
+    // nowhere.
+    if (!$preview && !$entity_type->isInternal() && $entity_type->isVersionable()) {
       $url = Url::fromRoute(sprintf('jsonapi.%s.individual', $entity_type->getTypeName()), ['entity' => $uuid], ['query' => ['resourceVersion' => $version]]);
       $links['related'] = new Link(new CacheableMetadata(), $url, 'related');
     }

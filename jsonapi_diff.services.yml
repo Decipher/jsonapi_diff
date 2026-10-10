@@ -12,6 +12,7 @@ services:
     arguments:
       - '@jsonapi.version_negotiator'
       - '@jsonapi_diff.entity_view_check'
+      - '@tempstore.private'
   # The class is swapped for its impostor subclass by the service provider,
   # because the serializer only accepts normalizers from JSON:API's own
   # namespace. The lowest decoration priority is applied last and so wraps

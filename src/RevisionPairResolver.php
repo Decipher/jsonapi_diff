@@ -6,10 +6,15 @@ namespace Drupal\jsonapi_diff;
 
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Entity\ContentEntityInterface;
+use Drupal\Core\Entity\EntityFormInterface;
 use Drupal\Core\Http\Exception\CacheableAccessDeniedHttpException;
 use Drupal\Core\Http\Exception\CacheableBadRequestHttpException;
 use Drupal\Core\Http\Exception\CacheableNotFoundHttpException;
+use Drupal\Core\Entity\FieldableEntityInterface;
+use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
+use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Session\AccountInterface;
+use Drupal\Core\TempStore\PrivateTempStoreFactory;
 use Drupal\jsonapi\Revisions\ResourceVersionRouteEnhancer;
 use Drupal\jsonapi\Revisions\VersionNegotiator;
 use Drupal\jsonapi_diff\Access\EntityViewCheck;
@@ -33,9 +38,18 @@ final readonly class RevisionPairResolver {
    */
   public const string DEFAULT_RIGHT = 'rel:working-copy';
 
+  /**
+   * The version of the current user's unsaved preview of a node.
+   *
+   * It follows core's grammar but is resolved here only. Core JSON:API keeps
+   * no such version, so its own routes never learn the identifier.
+   */
+  public const string PREVIEW = 'rel:preview';
+
   public function __construct(
     private VersionNegotiator $versionNegotiator,
     private EntityViewCheck $entityViewCheck,
+    private PrivateTempStoreFactory $tempStoreFactory,
   ) {}
 
   /**
@@ -72,8 +86,8 @@ final readonly class RevisionPairResolver {
     $left ??= self::DEFAULT_LEFT;
     $right ??= self::DEFAULT_RIGHT;
 
-    $left_revision = $this->negotiate($entity, $left, $cacheability);
-    $right_revision = $this->negotiate($entity, $right, $cacheability);
+    [$left_revision, $left_token] = $this->negotiate($entity, $left, $cacheability);
+    [$right_revision, $right_token] = $this->negotiate($entity, $right, $cacheability);
     $cacheability->addCacheableDependency($left_revision);
     $cacheability->addCacheableDependency($right_revision);
 
@@ -88,7 +102,7 @@ final readonly class RevisionPairResolver {
       throw new CacheableAccessDeniedHttpException($cacheability, $message);
     }
 
-    return new RevisionPair($left_revision, $right_revision, $left, $right, $cacheability, $account);
+    return new RevisionPair($left_revision, $right_revision, $left, $right, $cacheability, $account, $left_token, $right_token);
   }
 
   /**
@@ -97,8 +111,15 @@ final readonly class RevisionPairResolver {
    * Core's negotiator already throws cacheable 400 and 404 exceptions. They
    * are rethrown with this route's cacheability added, so a cached error
    * varies by the `leftVersion` and `rightVersion` query arguments.
+   *
+   * @return array{\Drupal\Core\Entity\ContentEntityInterface, string|null}
+   *   The revision, and for an unsaved preview the token that names it.
    */
-  private function negotiate(ContentEntityInterface $entity, string $identifier, CacheableMetadata $cacheability): ContentEntityInterface {
+  private function negotiate(ContentEntityInterface $entity, string $identifier, CacheableMetadata $cacheability): array {
+    if ($identifier === self::PREVIEW) {
+      return $this->preview($entity, $cacheability);
+    }
+
     // Core validates the shape before negotiating, so a bare `12` is a 400
     // and never reaches a negotiator.
     if (preg_match(ResourceVersionRouteEnhancer::VERSION_IDENTIFIER_VALIDATOR, $identifier) !== 1) {
@@ -118,7 +139,75 @@ final readonly class RevisionPairResolver {
 
     assert($revision instanceof ContentEntityInterface);
     // The translation the comparison reads is the one judged and served.
-    return $this->entityViewCheck->compared($revision);
+    return [$this->entityViewCheck->compared($revision), NULL];
+  }
+
+  /**
+   * Resolves the current user's unsaved preview of a node.
+   *
+   * Core's node form keeps the preview in the private `node_preview` temp
+   * store, keyed by the node's UUID, so only the user who pressed Preview
+   * can read it. The response is never cached: the preview changes every
+   * time the form is previewed again.
+   *
+   * @return array{\Drupal\Core\Entity\ContentEntityInterface, string}
+   *   The preview entity, and a token naming this preview. The token is a
+   *   hash of the temp store entry's owner and time, so diff ids differ from
+   *   every stored revision's and from any other editor's preview.
+   *
+   * @throws \Drupal\Core\Http\Exception\CacheableBadRequestHttpException
+   *   When the entity is not a node. Core keeps previews only for nodes.
+   * @throws \Drupal\Core\Http\Exception\CacheableNotFoundHttpException
+   *   When the current user has no preview of this node in progress.
+   */
+  private function preview(ContentEntityInterface $entity, CacheableMetadata $cacheability): array {
+    $cacheability->mergeCacheMaxAge(0);
+    if ($entity->getEntityTypeId() !== 'node') {
+      $message = sprintf('`%s` names an unsaved node preview, and the `%s` entity type has none.', self::PREVIEW, $entity->getEntityTypeId());
+      throw new CacheableBadRequestHttpException($cacheability, $message);
+    }
+
+    $store = $this->tempStoreFactory->get('node_preview');
+    $uuid = (string) $entity->uuid();
+    $form_state = $store->get($uuid);
+    $metadata = $store->getMetadata($uuid);
+    $form_object = $form_state instanceof FormStateInterface ? $form_state->getFormObject() : NULL;
+    $preview = $form_object instanceof EntityFormInterface ? $form_object->getEntity() : NULL;
+    if (!$preview instanceof ContentEntityInterface || $preview->uuid() !== $uuid || $metadata === NULL) {
+      throw new CacheableNotFoundHttpException($cacheability, 'No preview of this node is in progress for the current user.');
+    }
+
+    $this->nameUnsavedEntities($preview);
+    $token = 'preview-' . substr(hash('sha256', $metadata->getOwnerId() . ':' . $metadata->getUpdated() . ':' . $uuid), 0, 12);
+    return [$this->entityViewCheck->compared($preview), $token];
+  }
+
+  /**
+   * Gives every unsaved entity in a preview's reference tree a temporary id.
+   *
+   * Diff keys what it compares by entity id, so two unsaved paragraphs, both
+   * without one, would be read as the same entity. Each gets a negative id,
+   * unique in this request and never saved: the preview came from the temp
+   * store and is discarded after the response.
+   */
+  private function nameUnsavedEntities(FieldableEntityInterface $entity, int &$next = -1): void {
+    foreach ($entity->getFields(FALSE) as $items) {
+      if (!$items instanceof EntityReferenceFieldItemListInterface || $items->getFieldDefinition()->getType() !== 'entity_reference_revisions') {
+        continue;
+      }
+      foreach ($items as $item) {
+        $child = $item->entity ?? NULL;
+        if (!$child instanceof FieldableEntityInterface) {
+          continue;
+        }
+        $id_key = $child->getEntityType()->getKey('id');
+        if ($child->id() === NULL && is_string($id_key)) {
+          $child->set($id_key, $next--);
+          $child->enforceIsNew();
+        }
+        $this->nameUnsavedEntities($child, $next);
+      }
+    }
   }
 
   /**

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\jsonapi_diff\Kernel;
 
+use Drupal\Component\Serialization\Json;
 use Drupal\Core\Cache\CacheableResponseInterface;
+use Drupal\Core\Form\FormState;
 use Drupal\Core\Http\Exception\CacheableBadRequestHttpException;
 use Drupal\Core\Http\Exception\CacheableNotFoundHttpException;
 use Drupal\jsonapi_diff\Resource\DiffResource;
@@ -12,6 +14,7 @@ use Drupal\jsonapi_diff_test\TestAccess;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\node\Entity\NodeType;
 use Drupal\node\NodeInterface;
+use Drupal\paragraphs\Entity\Paragraph;
 use Drupal\paragraphs\ParagraphInterface;
 use Drupal\Tests\jsonapi_diff\Traits\DiffContentTrait;
 use Drupal\Tests\user\Traits\UserCreationTrait;
@@ -345,6 +348,80 @@ class DiffResourceTest extends KernelTestBase {
   }
 
   /**
+   * The unsaved preview compares like a revision, new paragraphs included.
+   *
+   * The preview is what core's node form keeps in the private temp store:
+   * an edited field, an edited paragraph and a paragraph not saved at all.
+   */
+  public function testPreviewComparesTheUnsavedForm(): void {
+    $block = $this->createBlock('saved block');
+    $node = $this->createArticle(['uid' => $this->editor->id(), 'field_text' => 'saved text', 'field_blocks' => $this->references($block)]);
+    $preview = $this->loadNodeRevision((int) $node->getRevisionId());
+    $preview->set('field_text', 'previewed text');
+    // The Paragraphs widget flags an edited paragraph to be saved, which is
+    // what keeps the edit when the form state goes into the temp store.
+    $edited = $preview->get('field_blocks')->entity;
+    $this->assertInstanceOf(ParagraphInterface::class, $edited);
+    $edited->set('field_body', 'previewed block')->setNeedsSave(TRUE);
+    $first_new = Paragraph::create(['type' => 'block', 'field_body' => 'first new block']);
+    $second_new = Paragraph::create(['type' => 'block', 'field_body' => 'second new block']);
+    $preview->get('field_blocks')->appendItem($first_new);
+    $preview->get('field_blocks')->appendItem($second_new);
+    $this->storePreview($preview);
+
+    $response = $this->respond($node, ['rightVersion' => 'rel:preview']);
+    $document = Json::decode((string) $response->getContent());
+
+    $data = $document['data'];
+    $this->assertMatchesRegularExpression('/^' . $node->uuid() . ':\d+:preview-[0-9a-f]{12}$/', $data['id']);
+    $this->assertSame('previewed text', $data['attributes']['fields']['field_text']['right']);
+    $this->assertSame('rel:preview', $data['relationships']['right']['data']['meta']['resourceVersion']);
+    $this->assertArrayNotHasKey('links', $data['relationships']['right']);
+
+    $children = $data['relationships']['children']['data'];
+    $this->assertCount(3, $children);
+    // A child's status is where it sits. What changed is in its fields.
+    $this->assertSame('same', $this->childMeta($children, $block)['status']);
+    $edited = $this->includedFor($document, $block)['attributes']['fields']['field_body'];
+    $this->assertSame('changed', $edited['status']);
+    $this->assertSame('previewed block', $edited['right']);
+    $this->assertSame('added', $this->childMeta($children, $first_new)['status']);
+    // Two unsaved paragraphs are told apart, though neither has an id.
+    $this->assertSame('first new block', $this->includedFor($document, $first_new)['attributes']['fields']['field_body']['right']);
+    $this->assertSame('second new block', $this->includedFor($document, $second_new)['attributes']['fields']['field_body']['right']);
+    $added = $this->includedFor($document, $second_new);
+    $this->assertNull($added['relationships']['left']['data']);
+    $this->assertSame('rel:preview', $added['relationships']['right']['data']['meta']['resourceVersion']);
+    $this->assertNull($added['relationships']['right']['data']['meta']['drupal_internal__revision_id']);
+    $this->assertArrayNotHasKey('links', $added);
+
+    $this->assertInstanceOf(CacheableResponseInterface::class, $response);
+    $this->assertSame(0, $response->getCacheableMetadata()->getCacheMaxAge());
+  }
+
+  /**
+   * Without a preview in progress, rel:preview names nothing.
+   */
+  public function testPreviewWithoutOneIsNotFound(): void {
+    $node = $this->createArticle(['uid' => $this->editor->id()]);
+
+    $this->expectException(CacheableNotFoundHttpException::class);
+    $this->respond($node, ['rightVersion' => 'rel:preview']);
+  }
+
+  /**
+   * Another user's preview is not the current user's.
+   */
+  public function testPreviewIsPrivateToItsEditor(): void {
+    $node = $this->createArticle(['uid' => $this->editor->id()]);
+    $this->storePreview($this->loadNodeRevision((int) $node->getRevisionId()));
+    $this->setCurrentUser($this->asAccount($this->createUser(['access content', 'view own unpublished content', 'view all revisions'])));
+
+    $this->expectException(CacheableNotFoundHttpException::class);
+    $this->respond($node, ['rightVersion' => 'rel:preview']);
+  }
+
+  /**
    * An include is refused, because the document always holds the whole tree.
    *
    * The JSON:API specification requires a 400 for an include a server does
@@ -410,6 +487,21 @@ class DiffResourceTest extends KernelTestBase {
     $event = new ResponseEvent($this->container->get('http_kernel'), $request, HttpKernelInterface::MAIN_REQUEST, $response);
     $this->container->get('jsonapi.resource_response.subscriber')->onResponse($event);
     return $event->getResponse();
+  }
+
+  /**
+   * Keeps a node in core's preview temp store, as the node form does.
+   */
+  protected function storePreview(NodeInterface $node): void {
+    $form_object = $this->container->get('entity_type.manager')->getFormObject('node', 'edit');
+    $form_object->setEntity($node);
+    $form_state = (new FormState())->setFormObject($form_object);
+    $this->container->get('tempstore.private')->get('node_preview')->set((string) $node->uuid(), $form_state);
+    // A real request reads the preview in a later request, so the stored
+    // revisions it compares against are never the objects the form edited.
+    $entity_type_manager = $this->container->get('entity_type.manager');
+    $entity_type_manager->getStorage('node')->resetCache();
+    $entity_type_manager->getStorage('paragraph')->resetCache();
   }
 
   /**
