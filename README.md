@@ -245,7 +245,9 @@ those items as referenced entities, which are matched by entity id.
 
 **A positional pair is an inference.** Children that no id matched are paired at
 one delta of one field, when they share an entity type and bundle and their text
-agrees by at least half its words. That reads a page which kept its
+agrees by at least half its words. Two children with no text at all skip only
+the word check, and still need the same entity type, bundle, field and delta.
+That reads a page which kept its
 shape. An insertion moves the blocks after it, and a rewritten block no longer
 agrees, so both fall back to a removal and an addition. `match: position` marks
 every inference.
