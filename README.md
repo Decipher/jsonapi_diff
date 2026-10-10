@@ -195,7 +195,8 @@ every descendant's counts, so on a page built from paragraphs the two differ.
 
 A sparse fieldset trims each diff in the document, the nested ones included:
 `?fields[jsonapi_diff--diff]=tree_summary` returns the counts alone. `?include`
-is ignored, because the tree is already whole.
+is refused with a `400`, because the tree is already whole: every child diff is
+always in `included`.
 
 Each response includes the cache tags of both revisions and every entity in the
 tree, Diff's configuration tags, and cache contexts for the two version
@@ -268,6 +269,11 @@ type.
 **A:** The client this was built for renders the page from the same data, so
 sending it once saves a request. For the tree's shape alone, ask for
 `fields[jsonapi_diff--diff]=tree_summary,children` and walk the counts.
+
+A child compared on both sides has a `self` link to its own diff, so its fields
+can be fetched later. An added or removed child has none, because the route
+compares two versions of one entity and that child exists in only one. For its
+fields, ask for the parent's diff without the fieldset.
 
 ## Maintainers
 
