@@ -149,7 +149,7 @@ leaves its segment empty.
 | `status` | `added`, `removed`, `changed` or `same` |
 | `left`, `right` | That side's value as one string |
 | `ops` | Line operations, each `{type, lines}` where `type` is `=`, `-` or `+` |
-| `items` | The same keys again per item of the field, each with its `delta` |
+| `items` | One entry per item of the field: `delta`, `status`, `left`, `right` and `ops` |
 
 A changed line arrives as a `-` followed by a `+`, which is the pair a client
 needs to run its own word diff. A field of cardinality one reports one item at
@@ -272,10 +272,11 @@ type.
 sending it once saves a request. For the tree's shape alone, ask for
 `fields[jsonapi_diff--diff]=tree_summary,children` and walk the counts.
 
-A child compared on both sides has a `self` link to its own diff, so its fields
-can be fetched later. An added or removed child has none, because the route
-compares two versions of one entity and that child exists in only one. For its
-fields, ask for the parent's diff without the fieldset.
+A child matched by id on both sides has a `self` link to its own diff, so its
+fields can be fetched later. An added or removed child has none, and nor does a
+child paired by position (`match: position`), because the route compares two
+versions of one entity and those name one entity or two. For their fields, ask
+for the parent's diff without the fieldset.
 
 ## Maintainers
 
