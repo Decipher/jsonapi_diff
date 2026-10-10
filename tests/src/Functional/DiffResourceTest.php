@@ -271,8 +271,14 @@ class DiffResourceTest extends BrowserTestBase {
     $this->assertSame(0, $document['data']['attributes']['summary']['changed']);
     foreach ($document['data']['attributes']['fields'] as $name => $field) {
       $this->assertSame('same', $field['status'], $name);
-      // A field's items agree with the field, and every field on this node
-      // takes one value, reported at delta 0.
+      // A recursed reference field has an entry of its own, even when empty,
+      // and that entry never has items.
+      if ($name === 'field_blocks') {
+        $this->assertSame([], $field['items']);
+        continue;
+      }
+      // A field's items agree with the field, and every other field on this
+      // node takes one value, reported at delta 0.
       $this->assertSame([0], array_column($field['items'], 'delta'), $name);
       $this->assertSame(['same'], array_column($field['items'], 'status'), $name);
     }
